@@ -1,4 +1,4 @@
-FROM node:10
+FROM node:20
 
 EXPOSE 47808/tcp
 EXPOSE 47808/udp

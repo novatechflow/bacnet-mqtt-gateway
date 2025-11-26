@@ -4,6 +4,22 @@ BACnet MQTT Gateway is gateway that connects BACnet devices via MQTT to the clou
 
 For BACnet connection the [Node BACstack](https://github.com/fh1ch/node-bacstack) is used.
 
+Pull prebuilt image:
+
+```bash
+docker pull ghcr.io/2pk03/bacnet-mqtt-gateway:latest
+```
+
+Quick start with Docker Compose (gateway + Mosquitto):
+
+```bash
+cp .env.example .env   # adjust credentials and gateway ID
+docker compose up -d --build
+```
+
+This uses `docker-compose.yml` and `mosquitto.conf` in the repo, builds a local image tag (`bacnet-mqtt-gateway:local`), and mounts `./devices` and `./config` into the container.
+The auth database lives in `./data` (mounted), so credentials persist across restarts.
+
 ## Functionalities
 
 * Discover BACnet devices in network (WhoIs)
@@ -44,10 +60,47 @@ For BACnet connection the [Node BACstack](https://github.com/fh1ch/node-bacstack
 
     # Logging Configuration
     LOG_LEVEL=info # e.g., debug, info, warn, error
+
+    # Optional MQTT TLS
+    MQTT_TLS_ENABLED=false
+    MQTT_TLS_CA_PATH=/path/to/ca.crt
+    MQTT_TLS_CERT_PATH=/path/to/client.crt
+    MQTT_TLS_KEY_PATH=/path/to/client.key
+    MQTT_TLS_REJECT_UNAUTHORIZED=true
+
+    # Auth / Users
+    AUTH_DB_PATH=./data/auth.db
+    AUTH_JWT_SECRET=super_secret_jwt_key
+    AUTH_TOKEN_EXPIRES_IN=1h
     ```
 
     Default fallback values are present in `config/default.json`. The mapping between environment variables and the configuration structure is defined in `config/custom-environment-variables.json`.
     The original MQTT configuration using certificate paths in `config/default.json` has been replaced by username/password authentication via environment variables.
+TLS is optional: set `MQTT_TLS_ENABLED=true` and point to CA/client cert/key paths to connect to secure brokers.
+
+### Auth
+
+On first startup, the gateway seeds an `admin` user with a **random password** and logs it once. Change it immediately by creating a new admin and deleting the default if desired.
+
+Auth endpoints:
+- `POST /auth/login` with `{ "username": "...", "password": "..." }` → returns JWT + refresh token.
+- `POST /auth/register` (admin token required) with `{ "username": "...", "password": "...", "role": "admin|viewer" }`.
+- `POST /auth/refresh` with `{ "refreshToken": "..." }` to rotate refresh tokens and get a new JWT.
+
+Use the JWT in `Authorization: Bearer <token>` for all `/api/*` routes.
+Health/metrics endpoints (`/health`, `/metrics`) remain unauthenticated.
+
+Resetting the seeded admin password (if forgotten): stop the stack and delete the auth DB, or delete only the admin row to trigger reseed on next start:
+```bash
+docker-compose down
+sqlite3 data/auth.db "DELETE FROM users WHERE username='admin';"
+docker-compose up -d --build
+```
+The gateway will log a fresh random admin password on startup.
+
+## Changelog
+
+See `CHANGELOG.md` for recent changes and release highlights.
 
 3. Start the gateway and open admin interface
 
@@ -146,6 +199,9 @@ The following endpoints are supported:
     }
     ```
 
+* `GET /health`: Basic health check for MQTT connectivity and configured BACnet devices.
+* `GET /metrics`: Prometheus-format metrics for MQTT connectivity and configured device count.
+
 For a complete and interactive API specification, please refer to the Swagger UI documentation available at `/api-docs` when the gateway is running.
 
 ## MQTT Interface
@@ -156,6 +212,15 @@ Polled BACnet object values are published to MQTT topics, typically structured f
 `homeassistant/<component_type>/<gateway_id>/<objectType>_<objectInstance>/state`
 Example: `homeassistant/sensor/my_bacnet_gateway_1/2_202/state`
 The payload is the JSON stringified value of the object's Present\_Value.
+
+Home Assistant discovery example (sensor):
+```yaml
+mqtt:
+  sensor:
+    - name: "Room Temp"
+      state_topic: "homeassistant/sensor/my_bacnet_gateway_1/2_202/state"
+      unit_of_measurement: "°C"
+```
 
 ### Writing Data (Commands)
 
@@ -184,6 +249,13 @@ A JSON string with a `value` field and optional `priority` and `bacnetApplicatio
 After a write attempt, a status message is published to:
 `bacnetwrite_status/<gateway_id>/<device_id>/<objectType>_<objectInstance>/<property_id>`
 Payload: `{"status": "success/error", "detail": "...", ...}`
+
+Quick write recipe:
+```bash
+mosquitto_pub -h <broker> -t "bacnetwrite/my_bacnet_gateway_1/114/1_0/85/set" -m '{"value":25.5,"priority":8}'
+# Expect status on:
+# bacnetwrite_status/my_bacnet_gateway_1/114/1_0/85
+```
 
 ## Run with Docker
 

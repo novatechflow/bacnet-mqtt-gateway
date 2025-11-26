@@ -4,7 +4,14 @@
         "host": "localhost",
         "port": 1883,
         "username": "default_user",
-        "password": "default_password"
+        "password": "default_password",
+        "tls": {
+            "enabled": false,
+            "caPath": "",
+            "certPath": "",
+            "keyPath": "",
+            "rejectUnauthorized": true
+        }
     },
     "bacnet": {
         "configFolder": "./devices/"
@@ -15,5 +22,10 @@
     },
     "logger": {
         "level": "info"
+    },
+    "auth": {
+        "dbPath": "./data/auth.db",
+        "jwtSecret": "change-me",
+        "tokenExpiresIn": "1h"
     }
 }

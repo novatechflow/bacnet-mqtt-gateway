@@ -8,19 +8,34 @@ const host = config.get('mqtt.host');
 const port = config.get('mqtt.port');
 const username = config.get('mqtt.username'); 
 const password = config.get('mqtt.password'); 
+const tlsConfigRaw = config.has('mqtt.tls') ? config.get('mqtt.tls') : {};
+const tlsConfig = {
+    enabled: tlsConfigRaw.enabled === true || tlsConfigRaw.enabled === 'true',
+    caPath: tlsConfigRaw.caPath,
+    certPath: tlsConfigRaw.certPath,
+    keyPath: tlsConfigRaw.keyPath,
+    rejectUnauthorized: typeof tlsConfigRaw.rejectUnauthorized === 'string'
+        ? tlsConfigRaw.rejectUnauthorized !== 'false'
+        : tlsConfigRaw.rejectUnauthorized
+};
 
 class MqttClient extends EventEmitter {
 
     constructor() {
         super();
 
-        var options = {
+        this.connected = false;
+        this.lastError = null;
+
+        const options = {
             host: host,
             port: port,
-            protocol: 'mqtt', 
+            protocol: tlsConfig.enabled ? 'mqtts' : 'mqtt', 
             username: username, 
             password: password, 
         };
+
+        this._applyTlsOptions(options);
 
         this.client = mqtt.connect(options);
 
@@ -29,11 +44,47 @@ class MqttClient extends EventEmitter {
         });
 
         this.client.on('error', (error) => {
+            this.lastError = error.message;
+            this.connected = false;
             logger.log('error', `[MQTT] Connection error: ${error.message}`);
+        });
+        this.client.on('close', () => {
+            this.connected = false;
+        });
+        this.client.on('offline', () => {
+            this.connected = false;
+        });
+        this.client.on('reconnect', () => {
+            this.connected = false;
         });
     }
 
+    _applyTlsOptions(options) {
+        if (!tlsConfig || !tlsConfig.enabled) {
+            return;
+        }
+        const maybeRead = (filePath) => {
+            try {
+                if (filePath) {
+                    return fs.readFileSync(filePath);
+                }
+            } catch (err) {
+                logger.log('error', `[MQTT] Failed to read TLS file '${filePath}': ${err.message}`);
+            }
+            return undefined;
+        };
+
+        options.ca = maybeRead(tlsConfig.caPath);
+        options.key = maybeRead(tlsConfig.keyPath);
+        options.cert = maybeRead(tlsConfig.certPath);
+        if (typeof tlsConfig.rejectUnauthorized === 'boolean') {
+            options.rejectUnauthorized = tlsConfig.rejectUnauthorized;
+        }
+    }
+
     _onConnect() {
+        this.connected = true;
+        this.lastError = null;
         // New topic: bacnetwrite/<gatewayId>/<deviceId>/<objectType>_<objectInstance>/<propertyId>/set
         const writeTopicPattern = `bacnetwrite/${gatewayId}/+/+/+/set`; 
         this.client.subscribe(writeTopicPattern, (err) => {
@@ -147,6 +198,13 @@ class MqttClient extends EventEmitter {
             const message = JSON.stringify(messageJson);
             this.client.publish(topic, message);
         }
+    }
+
+    getStatus() {
+        return {
+            connected: this.connected,
+            lastError: this.lastError
+        };
     }
 }
 

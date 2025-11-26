@@ -2,6 +2,89 @@ Vue.component('spinner', {
     template: '#spinner'
 });
 
+// simple token vault with AES-GCM using a static key (better than plaintext storage)
+const TokenVault = (() => {
+    const STORAGE_KEY = 'bacnet_gateway_token';
+    const KEY_MATERIAL = 'bacnet-gw-ui-key';
+
+    async function getKey() {
+        const enc = new TextEncoder();
+        return crypto.subtle.importKey(
+            'raw',
+            enc.encode(KEY_MATERIAL),
+            { name: 'AES-GCM' },
+            false,
+            ['encrypt', 'decrypt']
+        );
+    }
+
+    function bufToBase64(buf) {
+        return btoa(String.fromCharCode(...new Uint8Array(buf)));
+    }
+    function base64ToBuf(b64) {
+        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        return bytes.buffer;
+    }
+
+    async function encryptToken(token) {
+        const key = await getKey();
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const enc = new TextEncoder();
+        const encrypted = await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv },
+            key,
+            enc.encode(token)
+        );
+        return `${bufToBase64(iv)}.${bufToBase64(encrypted)}`;
+    }
+
+    async function decryptToken(payload) {
+        try {
+            const [ivB64, dataB64] = payload.split('.');
+            const iv = new Uint8Array(base64ToBuf(ivB64));
+            const data = base64ToBuf(dataB64);
+            const key = await getKey();
+            const decrypted = await crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv },
+                key,
+                data
+            );
+            return new TextDecoder().decode(decrypted);
+        } catch (err) {
+            console.error('Failed to decrypt token', err);
+            return null;
+        }
+    }
+
+    return {
+        async save(token) {
+            const encrypted = await encryptToken(token);
+            localStorage.setItem(STORAGE_KEY, encrypted);
+        },
+        async load() {
+            const stored = localStorage.getItem(STORAGE_KEY);
+            if (!stored) return null;
+            return decryptToken(stored);
+        },
+        clear() {
+            localStorage.removeItem(STORAGE_KEY);
+        }
+    };
+})();
+
+function parseJwt(token) {
+    try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(''));
+        return JSON.parse(jsonPayload);
+    } catch (e) {
+        return null;
+    }
+}
+
 Vue.component('whois', {
     data() {
         return {
@@ -167,19 +250,162 @@ Vue.component('object-write-form', {
     }
 });
 
+Vue.component('configured-devices', {
+    data() {
+        return {
+            devices: [],
+            loading: false
+        };
+    },
+    methods: {
+        async load() {
+            this.loading = true;
+            try {
+                const res = await axios.get('/api/bacnet/configured');
+                this.devices = res.data || [];
+            } catch (err) {
+                console.error('Failed to load configured devices', err);
+            } finally {
+                this.loading = false;
+            }
+        }
+    },
+    created() {
+        this.load();
+    }
+});
+
 new Vue({
     el: "#app",
     data() {
         return {
             state: null,
+            tokenValid: false,
+            loginForm: { username: '', password: '' },
+            loginLoading: false,
+            loginError: null,
+            currentUser: { username: '', role: '' },
+            health: { status: 'unknown', mqtt: { connected: false }, bacnet: { configuredDevices: 0 } },
+            changePasswordModal: false,
+            changeForm: { oldPassword: '', newPassword: '' },
+            changeError: null,
+            changeSuccess: null
         }
     },
     methods: {
+        async initAuth() {
+            const token = await TokenVault.load();
+            if (!token) {
+                this.tokenValid = false;
+                return;
+            }
+            const payload = parseJwt(token);
+            if (!payload || !payload.exp || payload.exp * 1000 < Date.now()) {
+                TokenVault.clear();
+                this.tokenValid = false;
+                return;
+            }
+            this.setAuth(token, payload);
+        },
+        setAuth(token, payload) {
+            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+            this.tokenValid = true;
+            this.currentUser = { username: payload.username, role: payload.role };
+            this.state = this.state || 'whois';
+        },
+        async login() {
+            this.loginError = null;
+            this.loginLoading = true;
+            try {
+                const res = await axios.post('/auth/login', {
+                    username: this.loginForm.username,
+                    password: this.loginForm.password
+                });
+                const token = res.data.token;
+                const payload = parseJwt(token);
+                if (!payload) {
+                    throw new Error('Invalid token received');
+                }
+                await TokenVault.save(token);
+                this.setAuth(token, payload);
+                this.loginForm.password = '';
+            } catch (err) {
+                this.loginError = (err.response && err.response.data && err.response.data.message) ? err.response.data.message : err.message;
+                TokenVault.clear();
+            } finally {
+                this.loginLoading = false;
+            }
+        },
+        logout() {
+            TokenVault.clear();
+            delete axios.defaults.headers.common['Authorization'];
+            this.tokenValid = false;
+            this.state = null;
+            this.currentUser = { username: '', role: '' };
+        },
         showWhois() {
             this.state = 'whois';
         },
         showObjects() {
             this.state = 'objects';
+        },
+        showConfigured() {
+            this.state = 'configured';
+        },
+        async loadHealth() {
+            try {
+                const res = await axios.get('/health');
+                const data = res.data || {};
+                this.health = {
+                    status: data.status || 'unknown',
+                    mqtt: data.mqtt || { connected: false },
+                    bacnet: { configuredDevices: data.bacnet ? data.bacnet.configuredDevices : 0 }
+                };
+            } catch (err) {
+                this.health = { status: 'degraded', mqtt: { connected: false }, bacnet: { configuredDevices: 0 } };
+            }
+        },
+        openChangePassword() {
+            this.changeError = null;
+            this.changeSuccess = null;
+            this.changeForm = { oldPassword: '', newPassword: '' };
+            this.changePasswordModal = true;
+        },
+        closeChangePassword() {
+            this.changePasswordModal = false;
+            this.changeError = null;
+            this.changeSuccess = null;
+        },
+        async submitChangePassword() {
+            this.changeError = null;
+            this.changeSuccess = null;
+            try {
+                await axios.post('/auth/change-password', {
+                    oldPassword: this.changeForm.oldPassword,
+                    newPassword: this.changeForm.newPassword
+                });
+                this.changeSuccess = 'Password updated. Please log in again.';
+                setTimeout(() => {
+                    this.closeChangePassword();
+                    this.logout();
+                }, 800);
+            } catch (err) {
+                this.changeError = (err.response && err.response.data && err.response.data.message) ? err.response.data.message : 'Failed to change password';
+            }
         }
+    },
+    created() {
+        axios.interceptors.response.use(
+            response => response,
+            error => {
+                if (error.response && error.response.status === 401) {
+                    this.logout();
+                }
+                return Promise.reject(error);
+            }
+        );
+        this.initAuth();
+        setInterval(() => this.loadHealth(), 15000);
+        this.loadHealth();
     }
 });

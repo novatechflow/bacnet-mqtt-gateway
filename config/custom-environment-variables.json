@@ -4,7 +4,19 @@
     "port": "MQTT_PORT",
     "username": "MQTT_USERNAME",
     "password": "MQTT_PASSWORD",
-    "gatewayId": "MQTT_GATEWAY_ID"
+    "gatewayId": "MQTT_GATEWAY_ID",
+    "tls": {
+      "enabled": "MQTT_TLS_ENABLED",
+      "caPath": "MQTT_TLS_CA_PATH",
+      "certPath": "MQTT_TLS_CERT_PATH",
+      "keyPath": "MQTT_TLS_KEY_PATH",
+      "rejectUnauthorized": "MQTT_TLS_REJECT_UNAUTHORIZED"
+    }
+  },
+  "auth": {
+    "dbPath": "AUTH_DB_PATH",
+    "jwtSecret": "AUTH_JWT_SECRET",
+    "tokenExpiresIn": "AUTH_TOKEN_EXPIRES_IN"
   },
   "httpServer": {
     "port": "HTTP_PORT"

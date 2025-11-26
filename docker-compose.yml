@@ -1,0 +1,22 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    restart: unless-stopped
+
+  bacnet-gateway:
+    image: bacnet-mqtt-gateway:local
+    build: .
+    env_file: .env
+    depends_on:
+      - mosquitto
+    volumes:
+      - ./devices:/usr/src/app/devices
+      - ./config:/usr/src/app/config
+      - ./data:/usr/src/app/data
+    ports:
+      - "8082:8082"
+    restart: unless-stopped

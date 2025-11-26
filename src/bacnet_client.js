@@ -21,8 +21,9 @@ class BacnetClient extends EventEmitter {
                 this.deviceConfigs.set(deviceConfig.device.deviceId.toString(), deviceConfig);
             } else {
                 logger.log('warn', '[BacnetClient] Loaded a device config without a valid deviceId.');
+                return;
             }
-            this.startPolling(deviceConfig.device, deviceConfig.objects, deviceConfig.polling.schedule);
+            this.startPolling(deviceConfig.device, deviceConfig.objects, deviceConfig.polling && deviceConfig.polling.schedule);
         })
         this.bacnetConfig.load();
     }
@@ -106,31 +107,46 @@ class BacnetClient extends EventEmitter {
     scanDevice(device) {
         return new Promise((resolve, reject) => {
             this._readObjectList(device.address, device.deviceId, (err, result) => {
-                if (!err) {
-                    const objectArray = result.values[0].values[0].value;
-                    const promises = [];
-
-                    objectArray.forEach(object => {
-                        promises.push(this._readObjectFull(device.address, object.value.type, object.value.instance));
-                    });
-
-                    Promise.all(promises).then((result) => {
-                        const successfulResults = result.filter(element => !element.error);
-                        const deviceObjects = successfulResults.map(element => this._mapToDeviceObject(element.value));
-                        this.emit('deviceObjects', device, deviceObjects);
-                        resolve(deviceObjects);
-                    }).catch((error) => {
-                        logger.log('error', `Error whilte fetching objects: ${error}`);
-                        reject(error);
-                    });
-                } else {
+                if (err) {
                     logger.log('error', `Error whilte fetching objects: ${err}`);
+                    reject(err);
+                    return;
                 }
+                const objectArray = result.values[0].values[0].value;
+                const promises = [];
+
+                objectArray.forEach(object => {
+                    promises.push(this._readObjectFull(device.address, object.value.type, object.value.instance));
+                });
+
+                Promise.all(promises).then((result) => {
+                    const successfulResults = result.filter(element => !element.error);
+                    const deviceObjects = successfulResults.map(element => this._mapToDeviceObject(element.value));
+                    this.emit('deviceObjects', device, deviceObjects);
+                    resolve(deviceObjects);
+                }).catch((error) => {
+                    logger.log('error', `Error whilte fetching objects: ${error}`);
+                    reject(error);
+                });
             });
         });
     }
 
     startPolling(device, objects, scheduleExpression) {
+        if (!device || !device.address) {
+            logger.log('warn', `[Polling] Missing device or address, skipping schedule for config: ${JSON.stringify(device)}`);
+            return;
+        }
+        if (!Array.isArray(objects) || objects.length === 0) {
+            logger.log('warn', `[Polling] No objects configured for device ${device.deviceId}, skipping schedule.`);
+            return;
+        }
+        if (!scheduleExpression) {
+            logger.log('warn', `[Polling] No schedule expression provided for device ${device.deviceId}, skipping schedule.`);
+            return;
+        }
+
+        try {
             scheduleJob(scheduleExpression, () => {
             const promises = [];
             objects.forEach(deviceObject => {
@@ -176,6 +192,9 @@ class BacnetClient extends EventEmitter {
                 logger.log('error', `Error while fetching values: ${error}`);
             });
         });
+        } catch (err) {
+            logger.log('error', `[Polling] Failed to schedule job for device ${device.deviceId}: ${err}`);
+        }
     }
 
     saveConfig(config) {

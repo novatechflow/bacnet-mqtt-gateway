@@ -4,12 +4,14 @@ const { BacnetClient } = require('./bacnet_client');
 const { Server } = require('./server');
 const { logger } = require('./common');
 const { MqttClient } = require('./mqtt_client');
+const { AuthService } = require('./auth_service');
 const config = require('config');
 const httpServerEnabled = config.get('httpServer.enabled');
 
 // init MQTT and BACnet clients
 const mqttClient = new MqttClient();
 const bacnetClient = new BacnetClient();
+const authService = new AuthService();
 
 bacnetClient.on('deviceFound', (device) => {
     mqttClient.publishMessage(device);
@@ -56,11 +58,18 @@ mqttClient.on('bacnetWriteCommand', (command) => {
     }
 });
 
-if (httpServerEnabled) {
-    new Server(bacnetClient);
-}
-
-function init() {
-
+async function init() {
+    try {
+        const seededPassword = await authService.init();
+        if (seededPassword) {
+            logger.log('info', `[Auth] Initial admin user 'admin' created with password: ${seededPassword}`);
+        }
+        if (httpServerEnabled) {
+            new Server(bacnetClient, mqttClient, authService);
+        }
+    } catch (err) {
+        logger.log('error', `[App] Failed to initialize auth service: ${err}`);
+        process.exit(1);
+    }
 }
 init();
