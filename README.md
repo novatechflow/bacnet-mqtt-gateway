@@ -267,3 +267,60 @@ docker run -p 8082:8082 -v /mnt/bacnet-gateway/devices:/usr/src/app/devices -v /
 ```
 
 With the specified file mountings you can put the config file under `/mnt/bacnet-gateway/config` and the device configs under `/mnt/bacnet-gateway/devices` on the host system.
+
+## Architecture Context
+
+This gateway solves one of the core IoT platform challenges: **protocol diversity**. BACnet is the standard for building automation (HVAC, lighting, access control), but it doesn't speak cloud-native protocols. This gateway bridges that gap.
+
+**Full architecture guide:** [IoT Platform Architecture Leadership](https://www.novatechflow.com/p/iot-platform-architecture-leadership.html)
+
+### The Problem
+
+IoT platforms fail when they treat protocol integration as one-off work:
+
+> "IoT is not HTTP. Devices use MQTT, BACnet, Modbus, OPC UA, CAN, CoAP, proprietary serial frames, and edge-specific protocols. Without a unifying abstraction, teams implement one-off integrations that cannot scale or evolve."
+
+BACnet is everywhere in commercial buildings — but it's a local network protocol with no native cloud connectivity.
+
+### What This Gateway Does
+```
+BACnet Devices (HVAC, Lighting, Meters)
+        │
+        │  BACnet/IP
+        ▼
+┌───────────────────────────────────┐
+│      bacnet-mqtt-gateway          │
+│  ┌─────────────────────────────┐  │
+│  │ Device Discovery (WhoIs)    │  │
+│  │ Object Polling (cron-based) │  │
+│  │ Write Support (priority)    │  │
+│  │ REST API + Web UI           │  │
+│  └─────────────────────────────┘  │
+└───────────────────────────────────┘
+        │
+        │  MQTT (TLS optional)
+        ▼
+   Cloud / Home Assistant / IoT Platform
+```
+
+### Key Capabilities
+
+- **Bidirectional** — read (polling) and write (commands) to BACnet objects
+- **Home Assistant friendly** — topics structured for auto-discovery
+- **Production ready** — JWT auth, health endpoints, Prometheus metrics
+- **Configurable** — per-device polling schedules, write priorities, BACnet tags
+- **Containerized** — Docker image + Compose for easy deployment
+
+### Where It Fits
+
+This gateway is a **protocol adapter** — the edge layer that normalizes building automation data before it reaches your IoT platform, streaming pipeline, or data lake.
+```
+BACnet → bacnet-mqtt-gateway → MQTT Broker → Infinimesh / Kafka / Flink → Iceberg
+```
+
+---
+
+**Building IoT integrations for industrial or building automation?**
+
+→ [Consulting Services](https://www.novatechflow.com/p/consulting-services.html)  
+→ [Book a call](https://cal.com/alexanderalten)
