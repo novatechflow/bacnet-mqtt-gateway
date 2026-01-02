@@ -6,6 +6,13 @@ Vue.component('spinner', {
 const TokenVault = (() => {
     const STORAGE_KEY = 'bacnet_gateway_token';
     const KEY_MATERIAL = 'bacnet-gw-ui-key';
+    const PLAINTEXT_PREFIX = 'plain:';
+
+    function hasWebCrypto() {
+        return typeof crypto !== 'undefined' &&
+            crypto.subtle &&
+            typeof crypto.subtle.importKey === 'function';
+    }
 
     async function getKey() {
         const enc = new TextEncoder();
@@ -27,6 +34,9 @@ const TokenVault = (() => {
     }
 
     async function encryptToken(token) {
+        if (!hasWebCrypto()) {
+            return `${PLAINTEXT_PREFIX}${token}`;
+        }
         const key = await getKey();
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const enc = new TextEncoder();
@@ -40,6 +50,12 @@ const TokenVault = (() => {
 
     async function decryptToken(payload) {
         try {
+            if (payload.startsWith(PLAINTEXT_PREFIX)) {
+                return payload.slice(PLAINTEXT_PREFIX.length);
+            }
+            if (!hasWebCrypto()) {
+                return null;
+            }
             const [ivB64, dataB64] = payload.split('.');
             const iv = new Uint8Array(base64ToBuf(ivB64));
             const data = base64ToBuf(dataB64);
