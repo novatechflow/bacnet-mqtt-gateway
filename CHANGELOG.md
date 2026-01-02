@@ -1,5 +1,9 @@
 # Changelog
 
+## V1.5.1
+
+- Fix admin login on non-secure contexts by falling back when Web Crypto is unavailable. (#34)
+
 ## V1.5
 
 - Added built-in user management backed by SQLite with JWT + refresh tokens, role-based access (admin/viewer), and change-password flow; initial admin password is randomly seeded.
