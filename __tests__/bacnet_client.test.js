@@ -1,3 +1,5 @@
+process.env.NODE_CONFIG_STRICT_MODE = '0';
+
 const EventEmitter = require('events');
 
 const mockReadPropertyMultiple = jest.fn();
@@ -47,21 +49,13 @@ jest.mock('../src/mqtt_client', () => ({
 }));
 
 describe('BacnetClient', () => {
-    beforeAll(() => {
-        process.env.NODE_CONFIG_STRICT_MODE = '0';
-    });
-
-    afterAll(() => {
-        delete process.env.NODE_CONFIG_STRICT_MODE;
-    });
-
     beforeEach(() => {
         jest.clearAllMocks();
     });
 
     test('scanDevice rejects when readPropertyMultiple returns an error', async () => {
         const error = new Error('mock failure');
-        mockReadPropertyMultiple.mockImplementation((_addr, _req, cb) => cb(error));
+        mockReadPropertyMultiple.mockImplementation((_addr, _req, _opts, cb) => cb(error));
 
         const { BacnetClient } = require('../src/bacnet_client');
         const client = new BacnetClient();

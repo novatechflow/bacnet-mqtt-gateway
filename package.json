@@ -1,6 +1,6 @@
 {
   "name": "bacnet-mqtt-gateway",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "MQTT - BACnet gateway",
   "main": "src/app.js",
   "scripts": {
@@ -49,6 +49,9 @@
   ],
   "devDependencies": {
     "jest": "^29.7.0"
+  },
+  "overrides": {
+    "tar": "7.5.3"
   },
   "jest": {
     "testEnvironment": "node"
