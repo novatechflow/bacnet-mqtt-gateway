@@ -1,5 +1,9 @@
 # Changelog
 
+## V1.5.2
+
+- Fix BACnet write failures when request options are missing and document BACnet request tuning (max segments/APDU).
+
 ## V1.5.1
 
 - Fix admin login on non-secure contexts by falling back when Web Crypto is unavailable. (#34)
