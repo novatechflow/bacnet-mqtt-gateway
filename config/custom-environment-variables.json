@@ -13,6 +13,10 @@
       "rejectUnauthorized": "MQTT_TLS_REJECT_UNAUTHORIZED"
     }
   },
+  "bacnet": {
+    "maxSegments": "BACNET_MAX_SEGMENTS",
+    "maxAdpu": "BACNET_MAX_ADPU"
+  },
   "auth": {
     "dbPath": "AUTH_DB_PATH",
     "jwtSecret": "AUTH_JWT_SECRET",

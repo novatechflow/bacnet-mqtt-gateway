@@ -14,7 +14,9 @@
         }
     },
     "bacnet": {
-        "configFolder": "./devices/"
+        "configFolder": "./devices/",
+        "maxSegments": 112,
+        "maxAdpu": 5
     },
     "httpServer": {
         "enabled": true,

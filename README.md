@@ -61,6 +61,11 @@ The auth database lives in `./data` (mounted), so credentials persist across res
     # Logging Configuration
     LOG_LEVEL=info # e.g., debug, info, warn, error
 
+    # BACnet Request Options
+    # Set BACNET_MAX_SEGMENTS=0 to disable segmentation if the target device doesn't support it.
+    BACNET_MAX_SEGMENTS=112
+    BACNET_MAX_ADPU=5
+
     # Optional MQTT TLS
     MQTT_TLS_ENABLED=false
     MQTT_TLS_CA_PATH=/path/to/ca.crt

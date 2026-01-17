@@ -1,4 +1,5 @@
 const bacnet = require('bacstack');
+const config = require('config');
 const { scheduleJob } = require('node-schedule');
 const { EventEmitter } = require('events');
 const { BacnetConfig } = require('./bacnet_config');
@@ -8,6 +9,7 @@ class BacnetClient extends EventEmitter {
 
     constructor() {
         super();
+        this.requestOptions = this._loadRequestOptions();
         this.client = new bacnet({ apduTimeout: 10000 });
         this.deviceConfigs = new Map();
 
@@ -28,6 +30,31 @@ class BacnetClient extends EventEmitter {
         this.bacnetConfig.load();
     }
 
+    _loadRequestOptions() {
+        const options = {};
+        if (config.has('bacnet.maxSegments')) {
+            const maxSegments = parseInt(config.get('bacnet.maxSegments'), 10);
+            if (!Number.isNaN(maxSegments)) {
+                options.maxSegments = maxSegments;
+            }
+        }
+        if (config.has('bacnet.maxAdpu')) {
+            const maxAdpu = parseInt(config.get('bacnet.maxAdpu'), 10);
+            if (!Number.isNaN(maxAdpu)) {
+                options.maxAdpu = maxAdpu;
+            }
+        }
+        return options;
+    }
+
+    _buildRequestOptions(priority) {
+        const options = { ...this.requestOptions };
+        if (priority !== undefined) {
+            options.priority = priority;
+        }
+        return options;
+    }
+
     _readObjectList(deviceAddress, deviceId, callback) {
         const requestArray = [{
             objectId: { type: bacnet.enum.ObjectTypes.OBJECT_DEVICE, instance: deviceId },
@@ -35,7 +62,7 @@ class BacnetClient extends EventEmitter {
                 { id: bacnet.enum.PropertyIds.PROP_OBJECT_LIST }
             ]
         }];
-        this.client.readPropertyMultiple(deviceAddress, requestArray, callback);
+        this.client.readPropertyMultiple(deviceAddress, requestArray, this._buildRequestOptions(), callback);
     }
 
     _readObject(deviceAddress, type, instance, properties) {
@@ -44,7 +71,7 @@ class BacnetClient extends EventEmitter {
                 objectId: { type: type, instance: instance },
                 properties: properties
             }];
-            this.client.readPropertyMultiple(deviceAddress, requestArray, (error, value) => {
+            this.client.readPropertyMultiple(deviceAddress, requestArray, this._buildRequestOptions(), (error, value) => {
                 resolve({
                     error: error,
                     value: value
@@ -250,7 +277,7 @@ class BacnetClient extends EventEmitter {
             }
 
             const values = [{ type: bacnetType, value: bacnetValue }];
-            const options = priority ? { priority: priority } : undefined;
+            const options = this._buildRequestOptions(priority);
 
             this.client.writeProperty(deviceAddress, objectId, propertyId, values, options, (err, val) => {
                 if (err) {
