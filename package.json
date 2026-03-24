@@ -28,7 +28,7 @@
     "jsonwebtoken": "^9.0.2",
     "mqtt": ">=4.2.6",
     "node-schedule": "^1.3.2",
-    "sqlite3": "^5.1.7",
+    "sqlite3": "^6.0.1",
     "swagger-ui-express": "^5.0.1",
     "utf-8-validate": ">=5.0.2",
     "winston": ">=3.2.1",
