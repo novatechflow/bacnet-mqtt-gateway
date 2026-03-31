@@ -51,7 +51,8 @@
     "jest": "^29.7.0"
   },
   "overrides": {
-    "tar": "7.5.4"
+    "tar": "7.5.4",
+    "baseline-browser-mapping": "2.10.12"
   },
   "jest": {
     "testEnvironment": "node"
