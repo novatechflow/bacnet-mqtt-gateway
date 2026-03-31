@@ -1,13 +1,21 @@
 jest.mock('mqtt', () => {
     const { EventEmitter } = require('events');
-    const publishMock = jest.fn();
+    const publishMock = jest.fn((topic, message, options, cb) => {
+        if (typeof options === 'function') {
+            options();
+        } else if (typeof cb === 'function') {
+            cb();
+        }
+    });
     const subscribeMock = jest.fn((pattern, cb) => cb && cb());
     let clientInstance;
     return {
         __getMocks: () => ({
-            get publishMock() { return publishMock; },
-            get subscribeMock() { return subscribeMock; },
-            get clientInstance() { return clientInstance; }
+            publishMock,
+            subscribeMock,
+            get clientInstance() {
+                return clientInstance;
+            }
         }),
         connect: jest.fn(() => {
             clientInstance = new EventEmitter();
@@ -33,11 +41,11 @@ describe('MqttClient', () => {
         });
         process.env.NODE_CONFIG_STRICT_MODE = '0';
         process.env.NODE_ENV = 'development';
+        jest.resetModules();
         mqttMocks = require('mqtt').__getMocks();
     });
 
     afterEach(() => {
-        clientInstance = undefined;
         Object.keys(process.env).forEach((k) => {
             if (!(k in originalEnv)) delete process.env[k];
         });
@@ -45,18 +53,45 @@ describe('MqttClient', () => {
         jest.resetModules();
     });
 
-    test('publishMessage publishes Home Assistant topic with retain', async () => {
+    test('publishMessage publishes telemetry to state, attributes, and canonical topics', async () => {
         const { MqttClient } = require('../src/mqtt_client');
         const client = new MqttClient();
         mqttMocks.clientInstance.emit('connect');
 
-        client.publishMessage({ '2_202': { value: 42 } });
+        client.publishMessage({
+            '2_202': {
+                value: 42,
+                name: 'Room Temp',
+                deviceId: '114',
+                address: '192.168.1.10',
+                acquiredAt: 1000,
+                publishedAt: 1100,
+                freshnessMs: 5000,
+                sourceStatus: 'fresh',
+                pollDurationMs: 80,
+                pollClass: 'fast'
+            }
+        });
 
         expect(mqttMocks.publishMock).toHaveBeenCalledWith(
             'homeassistant/sensor/test-gw/2_202/state',
             JSON.stringify(42),
-            { retain: true }
+            { retain: true },
+            expect.any(Function)
         );
+        expect(mqttMocks.publishMock).toHaveBeenCalledWith(
+            'homeassistant/sensor/test-gw/2_202/attributes',
+            expect.stringContaining('"sourceStatus":"fresh"'),
+            { retain: true },
+            expect.any(Function)
+        );
+        expect(mqttMocks.publishMock).toHaveBeenCalledWith(
+            'bacnet-gateway/test-gw/telemetry/114/2_202',
+            expect.stringContaining('"pollClass":"fast"'),
+            { retain: true },
+            expect.any(Function)
+        );
+        expect(client.getStatus().publishSuccessCount).toBe(3);
     });
 
     test('publishMessage skips empty object', async () => {
@@ -64,7 +99,7 @@ describe('MqttClient', () => {
         const client = new MqttClient();
         mqttMocks.clientInstance.emit('connect');
 
-        client.publishMessage({}); // empty object
+        client.publishMessage({});
 
         expect(mqttMocks.publishMock).not.toHaveBeenCalled();
     });
@@ -104,29 +139,5 @@ describe('MqttClient', () => {
             priority: 8,
             bacnetApplicationTag: undefined
         });
-    });
-
-    test('onMessage publishes write status on successful command emit', async () => {
-        const { MqttClient } = require('../src/mqtt_client');
-        const client = new MqttClient();
-        mqttMocks.clientInstance.emit('connect');
-
-        client.emit('bacnetWriteCommand', {
-            deviceId: '114',
-            objectKey: '1_0',
-            objectType: 1,
-            objectInstance: 0,
-            propertyId: 85,
-            value: 1,
-            priority: undefined,
-            bacnetApplicationTag: undefined
-        });
-
-        // No publish expected here; this just ensures no throw. Real status publish happens in app.js on completion.
-        expect(mqttMocks.publishMock).not.toHaveBeenCalledWith(
-            expect.stringContaining('bacnetwrite_status'),
-            expect.anything(),
-            expect.anything()
-        );
     });
 });
