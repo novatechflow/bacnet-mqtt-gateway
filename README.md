@@ -7,7 +7,7 @@ For BACnet connection the [Node BACstack](https://github.com/fh1ch/node-bacstack
 Pull prebuilt image:
 
 ```bash
-docker pull ghcr.io/2pk03/bacnet-mqtt-gateway:latest
+docker pull ghcr.io/novatechflow/bacnet-mqtt-gateway:latest
 ```
 
 Quick start with Docker Compose (gateway + Mosquitto):
@@ -40,7 +40,7 @@ The auth database lives in `./data` (mounted), so credentials persist across res
 1. Clone repo and install npm dependencies:
 
     ```shell
-    git clone https://github.com/2pk03/bacnet-mqtt-gateway.git
+    git clone https://github.com/novatechflow/bacnet-mqtt-gateway.git
     cd bacnet-mqtt-gateway
     npm install
     ```
@@ -131,6 +131,21 @@ The gateway will then generate a fresh random admin password on startup and deli
 ## Changelog
 
 See `CHANGELOG.md` for recent changes and release highlights.
+
+## Security And Quality Checks
+
+Local verification commands:
+
+```bash
+make test
+make codeql
+```
+
+`make test` validates the admin UI JavaScript syntax and then runs the full Jest suite, including the backend and admin UI smoke tests.
+
+`make codeql` runs local CodeQL analysis and prints any findings from the generated SARIF report.
+
+Dependabot security fixes in this repo are handled through lockfile and override updates for transitive packages when needed. If you are maintaining a long-lived deployment branch, refresh dependencies and rerun both commands before release.
 
 3. Start the gateway and open admin interface
 
@@ -364,7 +379,7 @@ BACnet Devices (HVAC, Lighting, Meters)
 
 This gateway is a **reliability layer around a protocol bridge** — the edge layer that normalizes building automation data before it reaches your IoT platform, streaming pipeline, or data lake.
 ```
-BACnet → bacnet-mqtt-gateway → MQTT Broker → Infinimesh / Kafka / Flink → Iceberg
+BACnet → bacnet-mqtt-gateway → MQTT Broker → your platform / Kafka / Flink → Iceberg
 ```
 
 ---
