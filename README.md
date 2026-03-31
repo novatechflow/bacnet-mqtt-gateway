@@ -379,7 +379,7 @@ BACnet Devices (HVAC, Lighting, Meters)
 
 This gateway is a **reliability layer around a protocol bridge** — the edge layer that normalizes building automation data before it reaches your IoT platform, streaming pipeline, or data lake.
 ```
-BACnet → bacnet-mqtt-gateway → MQTT Broker → your platform / Kafka / Flink → Iceberg
+BACnet → bacnet-mqtt-gateway → MQTT Broker → Infinimesh / Kafka / Flink → Iceberg
 ```
 
 ---
