@@ -1,10 +1,11 @@
 {
   "name": "bacnet-mqtt-gateway",
-  "version": "1.5.3",
-  "description": "MQTT - BACnet gateway",
+  "version": "1.6.0",
+  "description": "Production-ready BACnet to MQTT gateway with bounded polling, SQLite runtime state, and observability",
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
+    "reset-admin": "node scripts/reset-admin.js",
     "test": "jest"
   },
   "repository": {
@@ -41,7 +42,7 @@
   "keywords": [
     "bacnet",
     "mqtt",
-    "infinimesh",
+    "building-automation",
     "iiot",
     "iot",
     "smartcity",
@@ -51,7 +52,8 @@
     "jest": "^29.7.0"
   },
   "overrides": {
-    "tar": "7.5.4"
+    "tar": "7.5.4",
+    "baseline-browser-mapping": "2.10.12"
   },
   "jest": {
     "testEnvironment": "node"

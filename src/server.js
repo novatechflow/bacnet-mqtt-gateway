@@ -31,6 +31,12 @@ class Server {
             standardHeaders: true,
             legacyHeaders: false
         });
+        const apiLimiter = rateLimit({
+            windowMs: 60 * 1000,
+            max: 120,
+            standardHeaders: true,
+            legacyHeaders: false
+        });
 
         // auth routes
         this.app.post('/auth/login', authLimiter, this._login.bind(this));
@@ -43,11 +49,12 @@ class Server {
         this.app.get('/metrics', this._metrics.bind(this));
 
         // protected API
-        this.app.put('/api/bacnet/scan', this._requireRole('viewer'), this._scanForDevices.bind(this));
-        this.app.put('/api/bacnet/:deviceId/objects', this._requireRole('viewer'), this._scanDevice.bind(this));
-        this.app.get('/api/bacnet/configured', this._requireRole('viewer'), this._listConfigured.bind(this));
-        this.app.put('/api/bacnet/:deviceId/config', this._requireRole('admin'), this._configurePolling.bind(this));
-        this.app.put('/api/bacnet/write', this._requireRole('admin'), this._writeProperty.bind(this)); 
+        this.app.put('/api/bacnet/scan', apiLimiter, this._requireRole('viewer'), this._scanForDevices.bind(this));
+        this.app.put('/api/bacnet/:deviceId/objects', apiLimiter, this._requireRole('viewer'), this._scanDevice.bind(this));
+        this.app.get('/api/bacnet/configured', apiLimiter, this._requireRole('viewer'), this._listConfigured.bind(this));
+        this.app.get('/api/bacnet/runtime', apiLimiter, this._requireRole('viewer'), this._listRuntime.bind(this));
+        this.app.put('/api/bacnet/:deviceId/config', apiLimiter, this._requireRole('admin'), this._configurePolling.bind(this));
+        this.app.put('/api/bacnet/write', apiLimiter, this._requireRole('admin'), this._writeProperty.bind(this)); 
 
         // start server
         this.app.listen(port, () => {
@@ -76,12 +83,12 @@ class Server {
                     const config = {
                         'device': device,
                         'polling': {
-                            'schedule': "*/15 * * * * *"
+                            'class': 'normal'
                         },
                         'objects': deviceObjects
                     }
                     this.bacnetClient.saveConfig(config);
-                    this.bacnetClient.startPolling(config.device, config.objects, config.polling.schedule);
+                    this.bacnetClient.startPolling(config.device, config.objects, config.polling);
                 }
                 res.send(deviceObjects);
             })
@@ -91,29 +98,73 @@ class Server {
             });
     }
 
-    _health(_req, res) {
+    async _health(_req, res) {
         const mqttStatus = this.mqttClient && this.mqttClient.getStatus ? this.mqttClient.getStatus() : { connected: false };
-        const bacnetStatus = {
-            configuredDevices: this.bacnetClient && this.bacnetClient.deviceConfigs ? this.bacnetClient.deviceConfigs.size : 0
-        };
-        const overallOk = mqttStatus.connected === true;
+        const bacnetStatus = this.bacnetClient && this.bacnetClient.getStatus ? this.bacnetClient.getStatus() : { configuredDevices: 0 };
+        const runtimeSummary = this.bacnetClient && this.bacnetClient.runtimeState && this.bacnetClient.runtimeState.getMetricsSummary
+            ? await this.bacnetClient.runtimeState.getMetricsSummary()
+            : { healthyDevices: 0, degradedDevices: 0, openCircuits: 0, staleObjects: 0 };
+        const overallOk = mqttStatus.connected === true && runtimeSummary.openCircuits === 0;
         res.status(200).send({
             status: overallOk ? 'ok' : 'degraded',
             mqtt: mqttStatus,
-            bacnet: bacnetStatus
+            bacnet: bacnetStatus,
+            runtime: runtimeSummary
         });
     }
 
-    _metrics(_req, res) {
+    async _metrics(_req, res) {
         const mqttStatus = this.mqttClient && this.mqttClient.getStatus ? this.mqttClient.getStatus() : { connected: false };
-        const configuredDevices = this.bacnetClient && this.bacnetClient.deviceConfigs ? this.bacnetClient.deviceConfigs.size : 0;
+        const bacnetStatus = this.bacnetClient && this.bacnetClient.getStatus ? this.bacnetClient.getStatus() : {};
+        const runtimeSummary = this.bacnetClient && this.bacnetClient.runtimeState && this.bacnetClient.runtimeState.getMetricsSummary
+            ? await this.bacnetClient.runtimeState.getMetricsSummary()
+            : { configuredDevices: 0, healthyDevices: 0, degradedDevices: 0, openCircuits: 0, staleObjects: 0 };
         const lines = [
             '# HELP bacnet_gateway_mqtt_connected MQTT connection state (1=connected, 0=not connected)',
             '# TYPE bacnet_gateway_mqtt_connected gauge',
             `bacnet_gateway_mqtt_connected ${mqttStatus.connected ? 1 : 0}`,
             '# HELP bacnet_gateway_configured_devices Count of BACnet devices configured for polling',
             '# TYPE bacnet_gateway_configured_devices gauge',
-            `bacnet_gateway_configured_devices ${configuredDevices}`
+            `bacnet_gateway_configured_devices ${runtimeSummary.configuredDevices}`,
+            '# HELP bacnet_gateway_healthy_devices Count of healthy BACnet devices',
+            '# TYPE bacnet_gateway_healthy_devices gauge',
+            `bacnet_gateway_healthy_devices ${runtimeSummary.healthyDevices}`,
+            '# HELP bacnet_gateway_degraded_devices Count of degraded BACnet devices',
+            '# TYPE bacnet_gateway_degraded_devices gauge',
+            `bacnet_gateway_degraded_devices ${runtimeSummary.degradedDevices}`,
+            '# HELP bacnet_gateway_open_circuits Count of BACnet devices with open circuit breakers',
+            '# TYPE bacnet_gateway_open_circuits gauge',
+            `bacnet_gateway_open_circuits ${runtimeSummary.openCircuits}`,
+            '# HELP bacnet_gateway_stale_objects Count of stale BACnet objects',
+            '# TYPE bacnet_gateway_stale_objects gauge',
+            `bacnet_gateway_stale_objects ${runtimeSummary.staleObjects}`,
+            '# HELP bacnet_gateway_poll_queue_depth Pending BACnet device polls in queue',
+            '# TYPE bacnet_gateway_poll_queue_depth gauge',
+            `bacnet_gateway_poll_queue_depth ${bacnetStatus.queuedPolls || 0}`,
+            '# HELP bacnet_gateway_poll_queue_high_water_mark Maximum observed BACnet poll queue depth',
+            '# TYPE bacnet_gateway_poll_queue_high_water_mark gauge',
+            `bacnet_gateway_poll_queue_high_water_mark ${bacnetStatus.queueHighWaterMark || 0}`,
+            '# HELP bacnet_gateway_poll_total Total BACnet poll executions',
+            '# TYPE bacnet_gateway_poll_total counter',
+            `bacnet_gateway_poll_total ${bacnetStatus.totalPolls || 0}`,
+            '# HELP bacnet_gateway_poll_failures_total Total failed BACnet poll executions',
+            '# TYPE bacnet_gateway_poll_failures_total counter',
+            `bacnet_gateway_poll_failures_total ${bacnetStatus.failedPolls || 0}`,
+            '# HELP bacnet_gateway_objects_read_total Total BACnet objects read successfully',
+            '# TYPE bacnet_gateway_objects_read_total counter',
+            `bacnet_gateway_objects_read_total ${bacnetStatus.totalObjectsRead || 0}`,
+            '# HELP bacnet_gateway_object_failures_total Total BACnet object read failures',
+            '# TYPE bacnet_gateway_object_failures_total counter',
+            `bacnet_gateway_object_failures_total ${bacnetStatus.totalObjectFailures || 0}`,
+            '# HELP bacnet_gateway_poll_average_duration_ms Average BACnet poll duration in milliseconds',
+            '# TYPE bacnet_gateway_poll_average_duration_ms gauge',
+            `bacnet_gateway_poll_average_duration_ms ${bacnetStatus.avgPollDurationMs || 0}`,
+            '# HELP bacnet_gateway_mqtt_publish_success_total Total successful MQTT publishes',
+            '# TYPE bacnet_gateway_mqtt_publish_success_total counter',
+            `bacnet_gateway_mqtt_publish_success_total ${mqttStatus.publishSuccessCount || 0}`,
+            '# HELP bacnet_gateway_mqtt_publish_failure_total Total failed MQTT publishes',
+            '# TYPE bacnet_gateway_mqtt_publish_failure_total counter',
+            `bacnet_gateway_mqtt_publish_failure_total ${mqttStatus.publishFailureCount || 0}`
         ];
         res.type('text/plain').send(lines.join('\n'));
     }
@@ -126,11 +177,24 @@ class Server {
                     deviceId,
                     address: cfg.device && cfg.device.address,
                     schedule: cfg.polling && cfg.polling.schedule,
+                    pollClass: cfg.polling && cfg.polling.class,
+                    intervalMs: cfg.polling && cfg.polling.intervalMs,
+                    freshnessMs: cfg.polling && cfg.polling.freshnessMs,
                     objectCount: Array.isArray(cfg.objects) ? cfg.objects.length : 0
                 });
             }
         }
         res.send(list);
+    }
+
+    async _listRuntime(_req, res) {
+        try {
+            const states = await this.bacnetClient.listRuntimeStates();
+            res.send(states);
+        } catch (err) {
+            logger.log('error', `[API] Failed to fetch runtime states: ${err}`);
+            res.status(500).send({ status: 'error', message: 'Failed to fetch runtime states' });
+        }
     }
 
     _configurePolling(req, res) {
@@ -140,8 +204,22 @@ class Server {
         if (!config || !config.device || config.device.deviceId === undefined || !config.device.address) {
             validationErrors.push('device.deviceId and device.address are required.');
         }
-        if (!config || !config.polling || !config.polling.schedule) {
-            validationErrors.push('polling.schedule is required.');
+        if (!config || !config.polling) {
+            validationErrors.push('polling configuration is required.');
+        } else if (!config.polling.schedule && !config.polling.intervalMs && !config.polling.class) {
+            validationErrors.push('polling.schedule, polling.intervalMs, or polling.class is required.');
+        }
+        if (config && config.polling && config.polling.intervalMs !== undefined) {
+            const intervalMs = parseInt(config.polling.intervalMs, 10);
+            if (isNaN(intervalMs) || intervalMs <= 0) {
+                validationErrors.push('polling.intervalMs must be a positive number.');
+            }
+        }
+        if (config && config.polling && config.polling.freshnessMs !== undefined) {
+            const freshnessMs = parseInt(config.polling.freshnessMs, 10);
+            if (isNaN(freshnessMs) || freshnessMs <= 0) {
+                validationErrors.push('polling.freshnessMs must be a positive number.');
+            }
         }
         if (!config || !Array.isArray(config.objects) || config.objects.length === 0) {
             validationErrors.push('objects must be a non-empty array.');
@@ -159,7 +237,7 @@ class Server {
 
         try {
             this.bacnetClient.saveConfig(config);
-            this.bacnetClient.startPolling(config.device, config.objects, config.polling.schedule);
+            this.bacnetClient.startPolling(config.device, config.objects, config.polling);
             res.send({});
         } catch (err) {
             logger.log('error', `[API] Failed to configure polling: ${err}`);

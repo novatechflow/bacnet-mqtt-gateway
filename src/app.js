@@ -5,6 +5,7 @@ const { Server } = require('./server');
 const { logger } = require('./common');
 const { MqttClient } = require('./mqtt_client');
 const { AuthService } = require('./auth_service');
+const { deliverInitialAdminPassword } = require('./bootstrap_credentials');
 const config = require('config');
 const httpServerEnabled = config.get('httpServer.enabled');
 
@@ -60,9 +61,10 @@ mqttClient.on('bacnetWriteCommand', (command) => {
 
 async function init() {
     try {
+        await bacnetClient.ready;
         const seededPassword = await authService.init();
         if (seededPassword) {
-            logger.log('info', `[Auth] Initial admin user 'admin' created with password: ${seededPassword}`);
+            deliverInitialAdminPassword('admin', seededPassword);
         }
         if (httpServerEnabled) {
             new Server(bacnetClient, mqttClient, authService);

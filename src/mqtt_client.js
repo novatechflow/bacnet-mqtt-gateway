@@ -2,12 +2,13 @@ const mqtt = require('mqtt');
 const config = require('config');
 const fs = require('fs');
 const EventEmitter = require('events');
-const {logger} = require('./common');
+const { logger } = require('./common');
+
 const gatewayId = config.get('mqtt.gatewayId');
 const host = config.get('mqtt.host');
 const port = config.get('mqtt.port');
-const username = config.get('mqtt.username'); 
-const password = config.get('mqtt.password'); 
+const username = config.get('mqtt.username');
+const password = config.get('mqtt.password');
 const tlsConfigRaw = config.has('mqtt.tls') ? config.get('mqtt.tls') : {};
 const tlsConfig = {
     enabled: tlsConfigRaw.enabled === true || tlsConfigRaw.enabled === 'true',
@@ -20,23 +21,24 @@ const tlsConfig = {
 };
 
 class MqttClient extends EventEmitter {
-
     constructor() {
         super();
 
         this.connected = false;
         this.lastError = null;
+        this.publishSuccessCount = 0;
+        this.publishFailureCount = 0;
+        this.lastPublishedAt = null;
 
         const options = {
-            host: host,
-            port: port,
-            protocol: tlsConfig.enabled ? 'mqtts' : 'mqtt', 
-            username: username, 
-            password: password, 
+            host,
+            port,
+            protocol: tlsConfig.enabled ? 'mqtts' : 'mqtt',
+            username,
+            password
         };
 
         this._applyTlsOptions(options);
-
         this.client = mqtt.connect(options);
 
         this.client.on('connect', () => {
@@ -85,29 +87,23 @@ class MqttClient extends EventEmitter {
     _onConnect() {
         this.connected = true;
         this.lastError = null;
-        // New topic: bacnetwrite/<gatewayId>/<deviceId>/<objectType>_<objectInstance>/<propertyId>/set
-        const writeTopicPattern = `bacnetwrite/${gatewayId}/+/+/+/set`; 
+        const writeTopicPattern = `bacnetwrite/${gatewayId}/+/+/+/set`;
         this.client.subscribe(writeTopicPattern, (err) => {
             if (err) {
                 logger.log('error', `[MQTT] Error subscribing to write topic pattern ${writeTopicPattern}: ${err}`);
-            } else {
             }
         });
 
         this.client.on('message', (topic, message) => this._onMessage(topic, message));
-
-        this.client.on('error', function (err) {
-            logger.log('error', err);
-        });
-    };
+    }
 
     _onMessage(topic, message) {
         const topicParts = topic.split('/');
         if (topicParts.length === 6 && topicParts[0] === 'bacnetwrite' && topicParts[5] === 'set') {
             const receivedGatewayId = topicParts[1];
-            const deviceIdFromTopic = topicParts[2]; 
-            const objectKey = topicParts[3];         
-            const propertyIdFromTopicStr = topicParts[4]; 
+            const deviceIdFromTopic = topicParts[2];
+            const objectKey = topicParts[3];
+            const propertyIdFromTopicStr = topicParts[4];
 
             if (receivedGatewayId !== gatewayId) {
                 logger.log('warn', `[MQTT Write] Received write command for wrong gatewayId. Expected ${gatewayId}, got ${receivedGatewayId}. Ignoring.`);
@@ -132,80 +128,113 @@ class MqttClient extends EventEmitter {
             let payload;
             try {
                 payload = JSON.parse(message.toString());
-            } catch (e) {
-                // If not a JSON object, assume the raw message is the value, and priority is undefined.
-                // This maintains compatibility with sending just a simple value.
+            } catch (_e) {
                 payload = { value: message.toString() };
             }
 
-            const valueToWrite = payload.value;
-            const priority = payload.priority; 
-            const bacnetApplicationTag = payload.bacnetApplicationTag;
-
-            if (valueToWrite === undefined) {
+            if (payload.value === undefined) {
                 logger.log('warn', `[MQTT Write] No 'value' field in JSON payload for topic ${topic}. Payload: ${message.toString()}`);
                 return;
             }
             this.emit('bacnetWriteCommand', {
-                deviceId: deviceIdFromTopic, 
-                objectKey: objectKey, 
-                objectType: objectType,
-                objectInstance: objectInstance,
-                propertyId: propertyIdFromTopic, 
-                value: valueToWrite,
-                priority: priority,
-                bacnetApplicationTag: bacnetApplicationTag
+                deviceId: deviceIdFromTopic,
+                objectKey,
+                objectType,
+                objectInstance,
+                propertyId: propertyIdFromTopic,
+                value: payload.value,
+                priority: payload.priority,
+                bacnetApplicationTag: payload.bacnetApplicationTag
             });
         }
     }
 
-    publishMessage(messageJson) {
-        const keys = Object.keys(messageJson);
-        if (keys.length > 0 && messageJson[keys[0]] && typeof messageJson[keys[0]].value !== 'undefined') {
-            keys.forEach(key => { // key is like "2_202"
-                const bacnetObjectType = key.split('_')[0]; // e.g., "2"
-                let haComponentType = 'sensor'; 
-
-                // Using string comparison for object types as in the user's snippet
-                if (bacnetObjectType === '0' || bacnetObjectType === '2' || bacnetObjectType === '139' || bacnetObjectType === '140' || bacnetObjectType === '141' || bacnetObjectType === '143') {
-                    haComponentType = 'sensor';
-                } else if (bacnetObjectType === '3' || bacnetObjectType === '5' || bacnetObjectType === '21') {
-                    haComponentType = 'binary_sensor';
-                } else if (bacnetObjectType === '13' || bacnetObjectType === '19') { 
-                    haComponentType = 'sensor'; 
-                } else {
-                    haComponentType = 'sensor';
-                    logger.log('warn', `[MQTT] Unknown BACnet object type ${bacnetObjectType} for key ${key}, defaulting to HA type 'sensor'.`);
-                }
-
-                const topic = `homeassistant/${haComponentType}/${gatewayId}/${key}/state`;
-                const message = JSON.stringify(messageJson[key].value);
-
-                this.client.publish(topic, message, { retain: true }); 
-            });
-        } else if (messageJson && typeof messageJson.deviceId !== 'undefined' && typeof messageJson.address !== 'undefined') {
-            // Example topic: bacnet-gateway/YOUR_GATEWAY_ID/device_found/DEVICE_ID
-            const topic = `bacnet-gateway/${gatewayId}/device_found/${messageJson.deviceId}`;
-            const message = JSON.stringify(messageJson);
-            this.client.publish(topic, message, { retain: true });
-        } else {
-            if (keys.length === 0 && JSON.stringify(messageJson) === '{}') {
-                logger.log('warn', '[MQTT] Received empty object to publish. Skipping.');
-                return; 
+    _publish(topic, message, options = {}) {
+        this.client.publish(topic, message, options, (err) => {
+            if (err) {
+                this.publishFailureCount += 1;
+                this.lastError = err.message || String(err);
+                logger.log('error', `[MQTT] Publish failed for ${topic}: ${this.lastError}`);
+                return;
             }
-            logger.log('warn', `[MQTT] Unknown message structure. Publishing to default/error topic: ${JSON.stringify(messageJson)}`);
-            const topic = `bacnet-gateway/${gatewayId}/unknown_data`;
-            const message = JSON.stringify(messageJson);
-            this.client.publish(topic, message);
+            this.publishSuccessCount += 1;
+            this.lastPublishedAt = Date.now();
+        });
+    }
+
+    _getHaComponentType(objectKey) {
+        const bacnetObjectType = objectKey.split('_')[0];
+        if (bacnetObjectType === '0' || bacnetObjectType === '2' || bacnetObjectType === '13' || bacnetObjectType === '19' || bacnetObjectType === '139' || bacnetObjectType === '140' || bacnetObjectType === '141' || bacnetObjectType === '143') {
+            return 'sensor';
         }
+        if (bacnetObjectType === '3' || bacnetObjectType === '5' || bacnetObjectType === '21') {
+            return 'binary_sensor';
+        }
+        logger.log('warn', `[MQTT] Unknown BACnet object type ${bacnetObjectType} for key ${objectKey}, defaulting to HA type 'sensor'.`);
+        return 'sensor';
+    }
+
+    _publishTelemetryMap(telemetryMap) {
+        for (const [objectKey, telemetry] of Object.entries(telemetryMap)) {
+            const component = this._getHaComponentType(objectKey);
+            const stateTopic = `homeassistant/${component}/${gatewayId}/${objectKey}/state`;
+            const attributesTopic = `homeassistant/${component}/${gatewayId}/${objectKey}/attributes`;
+            const canonicalTopic = `bacnet-gateway/${gatewayId}/telemetry/${telemetry.deviceId}/${objectKey}`;
+
+            this._publish(stateTopic, JSON.stringify(telemetry.value), { retain: true });
+            this._publish(attributesTopic, JSON.stringify({
+                name: telemetry.name,
+                deviceId: telemetry.deviceId,
+                address: telemetry.address,
+                acquiredAt: telemetry.acquiredAt,
+                publishedAt: telemetry.publishedAt,
+                freshnessMs: telemetry.freshnessMs,
+                sourceStatus: telemetry.sourceStatus,
+                pollDurationMs: telemetry.pollDurationMs,
+                pollClass: telemetry.pollClass
+            }), { retain: true });
+            this._publish(canonicalTopic, JSON.stringify(telemetry), { retain: true });
+        }
+    }
+
+    publishMessage(messageJson) {
+        if (messageJson && typeof messageJson === 'object' && !Array.isArray(messageJson)) {
+            const keys = Object.keys(messageJson);
+            const looksLikeTelemetryMap = keys.length > 0 && keys.every((key) => {
+                const value = messageJson[key];
+                return value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value');
+            });
+
+            if (looksLikeTelemetryMap) {
+                this._publishTelemetryMap(messageJson);
+                return;
+            }
+
+            if (typeof messageJson.deviceId !== 'undefined' && typeof messageJson.address !== 'undefined') {
+                const topic = `bacnet-gateway/${gatewayId}/device_found/${messageJson.deviceId}`;
+                this._publish(topic, JSON.stringify(messageJson), { retain: true });
+                return;
+            }
+        }
+
+        if (JSON.stringify(messageJson) === '{}') {
+            logger.log('warn', '[MQTT] Received empty object to publish. Skipping.');
+            return;
+        }
+
+        logger.log('warn', `[MQTT] Unknown message structure. Publishing to default/error topic: ${JSON.stringify(messageJson)}`);
+        this._publish(`bacnet-gateway/${gatewayId}/unknown_data`, JSON.stringify(messageJson));
     }
 
     getStatus() {
         return {
             connected: this.connected,
-            lastError: this.lastError
+            lastError: this.lastError,
+            publishSuccessCount: this.publishSuccessCount,
+            publishFailureCount: this.publishFailureCount,
+            lastPublishedAt: this.lastPublishedAt
         };
     }
 }
 
-module.exports = {MqttClient};
+module.exports = { MqttClient };

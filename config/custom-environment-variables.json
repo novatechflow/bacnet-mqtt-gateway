@@ -17,10 +17,22 @@
     "maxSegments": "BACNET_MAX_SEGMENTS",
     "maxAdpu": "BACNET_MAX_ADPU"
   },
+  "polling": {
+    "globalConcurrency": "POLLING_GLOBAL_CONCURRENCY",
+    "objectConcurrency": "POLLING_OBJECT_CONCURRENCY",
+    "schedulerTickMs": "POLLING_SCHEDULER_TICK_MS",
+    "defaultFreshnessMs": "POLLING_DEFAULT_FRESHNESS_MS",
+    "failureThreshold": "POLLING_FAILURE_THRESHOLD",
+    "baseBackoffMs": "POLLING_BASE_BACKOFF_MS",
+    "maxBackoffMs": "POLLING_MAX_BACKOFF_MS"
+  },
   "auth": {
     "dbPath": "AUTH_DB_PATH",
     "jwtSecret": "AUTH_JWT_SECRET",
     "tokenExpiresIn": "AUTH_TOKEN_EXPIRES_IN"
+  },
+  "runtime": {
+    "dbPath": "RUNTIME_DB_PATH"
   },
   "httpServer": {
     "port": "HTTP_PORT"

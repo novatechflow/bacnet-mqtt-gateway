@@ -18,6 +18,20 @@
         "maxSegments": 112,
         "maxAdpu": 5
     },
+    "polling": {
+        "globalConcurrency": 2,
+        "objectConcurrency": 4,
+        "schedulerTickMs": 1000,
+        "defaultFreshnessMs": 30000,
+        "failureThreshold": 3,
+        "baseBackoffMs": 5000,
+        "maxBackoffMs": 120000,
+        "classIntervals": {
+            "fast": 5000,
+            "normal": 15000,
+            "slow": 60000
+        }
+    },
     "httpServer": {
         "enabled": true,
         "port": 8082
@@ -29,5 +43,8 @@
         "dbPath": "./data/auth.db",
         "jwtSecret": "change-me",
         "tokenExpiresIn": "1h"
+    },
+    "runtime": {
+        "dbPath": "./data/runtime.db"
     }
 }

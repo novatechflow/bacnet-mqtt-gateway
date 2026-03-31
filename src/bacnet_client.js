@@ -4,29 +4,64 @@ const { scheduleJob } = require('node-schedule');
 const { EventEmitter } = require('events');
 const { BacnetConfig } = require('./bacnet_config');
 const { DeviceObjectId, DeviceObject, logger } = require('./common');
+const { RuntimeState } = require('./runtime_state');
 
 class BacnetClient extends EventEmitter {
-
-    constructor() {
+    constructor(options = {}) {
         super();
         this.requestOptions = this._loadRequestOptions();
         this.client = new bacnet({ apduTimeout: 10000 });
         this.deviceConfigs = new Map();
+        this.deviceRuntime = new Map();
+        this.schedules = new Map();
+        this.queue = [];
+        this.queuedDevices = new Set();
+        this.activePolls = 0;
+
+        const pollingConfig = config.has('polling') ? config.get('polling') : {};
+        this.globalConcurrency = parseInt(pollingConfig.globalConcurrency || 2, 10);
+        this.objectConcurrency = parseInt(pollingConfig.objectConcurrency || 4, 10);
+        this.schedulerTickMs = parseInt(pollingConfig.schedulerTickMs || 1000, 10);
+        this.defaultFreshnessMs = parseInt(pollingConfig.defaultFreshnessMs || 30000, 10);
+        this.failureThreshold = parseInt(pollingConfig.failureThreshold || 3, 10);
+        this.baseBackoffMs = parseInt(pollingConfig.baseBackoffMs || 5000, 10);
+        this.maxBackoffMs = parseInt(pollingConfig.maxBackoffMs || 120000, 10);
+
+        this.metrics = {
+            totalPolls: 0,
+            successfulPolls: 0,
+            failedPolls: 0,
+            totalObjectsRead: 0,
+            totalObjectFailures: 0,
+            totalPollDurationMs: 0,
+            lastPollAt: null,
+            queueHighWaterMark: 0
+        };
+
+        this.runtimeState = options.runtimeState || new RuntimeState();
+        this.bacnetConfig = options.bacnetConfig || new BacnetConfig();
 
         this.client.on('iAm', (device) => {
             this.emit('deviceFound', device);
         });
 
-        this.bacnetConfig = new BacnetConfig();
+        this.ready = this._init();
+        this.schedulerHandle = setInterval(() => {
+            this._schedulerLoop().catch((err) => {
+                logger.log('error', `[Polling] Scheduler loop failed: ${err.message || err}`);
+            });
+        }, this.schedulerTickMs);
+    }
+
+    async _init() {
+        if (this.runtimeState && typeof this.runtimeState.init === 'function') {
+            await this.runtimeState.init();
+        }
         this.bacnetConfig.on('configLoaded', (deviceConfig) => {
-            if (deviceConfig && deviceConfig.device && deviceConfig.device.deviceId !== undefined) {
-                this.deviceConfigs.set(deviceConfig.device.deviceId.toString(), deviceConfig);
-            } else {
-                logger.log('warn', '[BacnetClient] Loaded a device config without a valid deviceId.');
-                return;
-            }
-            this.startPolling(deviceConfig.device, deviceConfig.objects, deviceConfig.polling && deviceConfig.polling.schedule);
-        })
+            this._registerDeviceConfig(deviceConfig).catch((err) => {
+                logger.log('error', `[Polling] Failed to register config: ${err.message || err}`);
+            });
+        });
         this.bacnetConfig.load();
     }
 
@@ -55,6 +90,299 @@ class BacnetClient extends EventEmitter {
         return options;
     }
 
+    async _registerDeviceConfig(deviceConfig) {
+        if (!deviceConfig || !deviceConfig.device || deviceConfig.device.deviceId === undefined) {
+            logger.log('warn', '[BacnetClient] Loaded a device config without a valid deviceId.');
+            return;
+        }
+
+        const deviceId = deviceConfig.device.deviceId.toString();
+        this.deviceConfigs.set(deviceId, deviceConfig);
+        const runtime = this._getOrCreateRuntime(deviceConfig.device, deviceConfig.polling);
+        runtime.objects = Array.isArray(deviceConfig.objects) ? deviceConfig.objects : [];
+        runtime.polling = this._normalizePolling(deviceConfig.polling);
+        runtime.address = deviceConfig.device.address;
+
+        await this.runtimeState.upsertDeviceState(this._serializeRuntime(runtime));
+        this._configureSchedule(deviceId, runtime.polling);
+    }
+
+    _normalizePolling(polling = {}) {
+        const normalized = { ...polling };
+        normalized.class = polling.class || 'normal';
+        normalized.intervalMs = this._resolveIntervalMs(polling);
+        normalized.freshnessMs = parseInt(polling.freshnessMs || normalized.intervalMs * 2 || this.defaultFreshnessMs, 10);
+        normalized.schedule = polling.schedule || null;
+        normalized.jitterMs = parseInt(polling.jitterMs || 0, 10);
+        return normalized;
+    }
+
+    _resolveIntervalMs(polling = {}) {
+        if (polling.intervalMs) {
+            return parseInt(polling.intervalMs, 10);
+        }
+        const classIntervals = config.has('polling.classIntervals')
+            ? config.get('polling.classIntervals')
+            : { fast: 5000, normal: 15000, slow: 60000 };
+        return parseInt(classIntervals[polling.class || 'normal'] || classIntervals.normal || 15000, 10);
+    }
+
+    _getOrCreateRuntime(device, polling = {}) {
+        const deviceId = device.deviceId.toString();
+        if (!this.deviceRuntime.has(deviceId)) {
+            this.deviceRuntime.set(deviceId, {
+                deviceId,
+                address: device.address,
+                pollClass: polling.class || 'normal',
+                schedule: polling.schedule || null,
+                nextDueAt: Date.now(),
+                nextEligiblePollAt: Date.now(),
+                consecutiveFailures: 0,
+                circuitState: 'closed',
+                lastAttemptAt: null,
+                lastSuccessAt: null,
+                lastDurationMs: null,
+                lastError: null,
+                cronDue: false,
+                objects: [],
+                polling: this._normalizePolling(polling)
+            });
+        }
+        return this.deviceRuntime.get(deviceId);
+    }
+
+    _serializeRuntime(runtime) {
+        return {
+            deviceId: runtime.deviceId,
+            address: runtime.address,
+            pollClass: runtime.pollClass,
+            schedule: runtime.schedule,
+            circuitState: runtime.circuitState,
+            consecutiveFailures: runtime.consecutiveFailures,
+            lastError: runtime.lastError,
+            lastAttemptAt: runtime.lastAttemptAt,
+            lastSuccessAt: runtime.lastSuccessAt,
+            lastDurationMs: runtime.lastDurationMs,
+            nextEligiblePollAt: runtime.nextEligiblePollAt
+        };
+    }
+
+    _configureSchedule(deviceId, polling) {
+        const existing = this.schedules.get(deviceId);
+        if (existing && existing.job) {
+            existing.job.cancel();
+        }
+        this.schedules.delete(deviceId);
+
+        if (polling.schedule) {
+            const job = scheduleJob(polling.schedule, () => {
+                const runtime = this.deviceRuntime.get(deviceId);
+                if (runtime) {
+                    runtime.cronDue = true;
+                }
+            });
+            this.schedules.set(deviceId, { job });
+            return;
+        }
+
+        const runtime = this.deviceRuntime.get(deviceId);
+        if (runtime) {
+            const jitter = polling.jitterMs > 0 ? Math.floor(Math.random() * polling.jitterMs) : 0;
+            runtime.nextDueAt = Date.now() + jitter;
+        }
+    }
+
+    async _schedulerLoop() {
+        await this.ready;
+        const now = Date.now();
+        for (const [deviceId, runtime] of this.deviceRuntime.entries()) {
+            if (!runtime.objects || runtime.objects.length === 0) {
+                continue;
+            }
+            if (this.queuedDevices.has(deviceId)) {
+                continue;
+            }
+            if (runtime.nextEligiblePollAt && runtime.nextEligiblePollAt > now) {
+                continue;
+            }
+            if (runtime.circuitState === 'open' && runtime.nextEligiblePollAt > now) {
+                continue;
+            }
+
+            const dueBySchedule = runtime.schedule ? runtime.cronDue === true : runtime.nextDueAt <= now;
+            if (!dueBySchedule) {
+                continue;
+            }
+
+            runtime.cronDue = false;
+            if (!runtime.schedule) {
+                runtime.nextDueAt = now + runtime.polling.intervalMs;
+            }
+            this.queue.push(deviceId);
+            this.queuedDevices.add(deviceId);
+            this.metrics.queueHighWaterMark = Math.max(this.metrics.queueHighWaterMark, this.queue.length);
+        }
+
+        await this._drainQueue();
+    }
+
+    async _drainQueue() {
+        while (this.activePolls < this.globalConcurrency && this.queue.length > 0) {
+            const deviceId = this.queue.shift();
+            this.queuedDevices.delete(deviceId);
+            this.activePolls += 1;
+            this._pollDevice(deviceId)
+                .catch((err) => {
+                    logger.log('error', `[Polling] Device poll failed for ${deviceId}: ${err.message || err}`);
+                })
+                .finally(() => {
+                    this.activePolls -= 1;
+                    if (this.queue.length > 0) {
+                        setImmediate(() => {
+                            this._drainQueue().catch((err) => {
+                                logger.log('error', `[Polling] Queue drain failed: ${err.message || err}`);
+                            });
+                        });
+                    }
+                });
+        }
+    }
+
+    async _pollDevice(deviceId) {
+        const deviceConfig = this.deviceConfigs.get(deviceId);
+        const runtime = this.deviceRuntime.get(deviceId);
+        if (!deviceConfig || !runtime) {
+            return;
+        }
+
+        const startedAt = Date.now();
+        runtime.lastAttemptAt = startedAt;
+        runtime.nextEligiblePollAt = startedAt;
+        await this.runtimeState.upsertDeviceState(this._serializeRuntime(runtime));
+
+        const reads = await this._runWithConcurrency(runtime.objects, this.objectConcurrency, async (deviceObject) => {
+            const objectId = deviceObject.objectId;
+            const result = await this._readObjectPresentValue(deviceConfig.device.address, objectId.type, objectId.instance);
+            return { objectId, result };
+        });
+
+        const completedAt = Date.now();
+        const durationMs = completedAt - startedAt;
+        this.metrics.totalPolls += 1;
+        this.metrics.totalPollDurationMs += durationMs;
+        this.metrics.lastPollAt = completedAt;
+
+        const values = {};
+        let successCount = 0;
+        let failureCount = 0;
+        let pollErrorClass = null;
+
+        for (const entry of reads) {
+            const objectKey = `${entry.objectId.type}_${entry.objectId.instance}`;
+            if (entry.result.error || !entry.result.value || !entry.result.value.values || entry.result.value.values.length === 0) {
+                failureCount += 1;
+                this.metrics.totalObjectFailures += 1;
+                if (entry.result.error && !pollErrorClass) {
+                    pollErrorClass = entry.result.error.message || 'bacnet_read_error';
+                }
+                continue;
+            }
+
+            successCount += 1;
+            this.metrics.totalObjectsRead += 1;
+            const object = entry.result.value;
+            const presentValue = this._findValueById(object.values[0].values, bacnet.enum.PropertyIds.PROP_PRESENT_VALUE);
+            const objectName = this._findValueById(object.values[0].values, bacnet.enum.PropertyIds.PROP_OBJECT_NAME);
+            const acquiredAt = completedAt;
+            const freshnessMs = runtime.polling.freshnessMs;
+
+            values[objectKey] = {
+                value: presentValue,
+                name: objectName,
+                objectKey,
+                objectType: entry.objectId.type,
+                objectInstance: entry.objectId.instance,
+                deviceId,
+                address: deviceConfig.device.address,
+                acquiredAt,
+                publishedAt: completedAt,
+                freshnessMs,
+                sourceStatus: 'fresh',
+                pollDurationMs: durationMs,
+                pollClass: runtime.polling.class
+            };
+
+            await this.runtimeState.saveObjectTelemetry(deviceId, objectKey, values[objectKey]);
+        }
+
+        if (successCount > 0) {
+            runtime.consecutiveFailures = 0;
+            runtime.circuitState = 'closed';
+            runtime.lastSuccessAt = completedAt;
+            runtime.lastError = null;
+            runtime.lastDurationMs = durationMs;
+            runtime.nextEligiblePollAt = completedAt;
+            this.metrics.successfulPolls += 1;
+            await this.runtimeState.recordPollHistory({
+                deviceId,
+                objectCount: runtime.objects.length,
+                successCount,
+                failureCount,
+                durationMs,
+                status: failureCount > 0 ? 'partial' : 'success',
+                errorClass: pollErrorClass,
+                createdAt: completedAt
+            });
+            await this.runtimeState.upsertDeviceState(this._serializeRuntime(runtime));
+            this.emit('values', deviceConfig.device, values);
+            return;
+        }
+
+        runtime.consecutiveFailures += 1;
+        runtime.circuitState = runtime.consecutiveFailures >= this.failureThreshold ? 'open' : 'closed';
+        runtime.lastError = pollErrorClass || 'poll_failed';
+        runtime.lastDurationMs = durationMs;
+        runtime.nextEligiblePollAt = completedAt + this._calculateBackoffMs(runtime.consecutiveFailures);
+        this.metrics.failedPolls += 1;
+        await this.runtimeState.recordPollHistory({
+            deviceId,
+            objectCount: runtime.objects.length,
+            successCount,
+            failureCount,
+            durationMs,
+            status: 'failed',
+            errorClass: runtime.lastError,
+            createdAt: completedAt
+        });
+        await this.runtimeState.upsertDeviceState(this._serializeRuntime(runtime));
+    }
+
+    _calculateBackoffMs(consecutiveFailures) {
+        const factor = Math.max(0, consecutiveFailures - 1);
+        return Math.min(this.maxBackoffMs, this.baseBackoffMs * Math.pow(2, factor));
+    }
+
+    async _runWithConcurrency(items, limit, worker) {
+        const results = new Array(items.length);
+        let index = 0;
+        const runners = new Array(Math.min(limit, items.length)).fill(null).map(async () => {
+            while (index < items.length) {
+                const current = index;
+                index += 1;
+                try {
+                    results[current] = await worker(items[current], current);
+                } catch (err) {
+                    results[current] = {
+                        objectId: items[current].objectId,
+                        result: { error: err, value: null }
+                    };
+                }
+            }
+        });
+        await Promise.all(runners);
+        return results;
+    }
+
     _readObjectList(deviceAddress, deviceId, callback) {
         const requestArray = [{
             objectId: { type: bacnet.enum.ObjectTypes.OBJECT_DEVICE, instance: deviceId },
@@ -66,7 +394,7 @@ class BacnetClient extends EventEmitter {
     }
 
     _readObject(deviceAddress, type, instance, properties) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
             const requestArray = [{
                 objectId: { type: type, instance: instance },
                 properties: properties
@@ -94,20 +422,19 @@ class BacnetClient extends EventEmitter {
     _readObjectPresentValue(deviceAddress, type, instance) {
         return this._readObject(deviceAddress, type, instance, [
             { id: bacnet.enum.PropertyIds.PROP_PRESENT_VALUE },
-            { id: bacnet.enum.PropertyIds.PROP_OBJECT_NAME}
+            { id: bacnet.enum.PropertyIds.PROP_OBJECT_NAME }
         ]);
     }
 
     _findValueById(properties, id) {
-        const property = properties.find(function (element) {
+        const property = properties.find(function(element) {
             return element.id === id;
         });
         if (property && property.value && property.value.length > 0) {
             return property.value[0].value;
-        } else {
-            return null;
         }
-    };
+        return null;
+    }
 
     _mapToDeviceObject(object) {
         if (!object || !object.values) {
@@ -142,13 +469,13 @@ class BacnetClient extends EventEmitter {
                 const objectArray = result.values[0].values[0].value;
                 const promises = [];
 
-                objectArray.forEach(object => {
+                objectArray.forEach((object) => {
                     promises.push(this._readObjectFull(device.address, object.value.type, object.value.instance));
                 });
 
-                Promise.all(promises).then((result) => {
-                    const successfulResults = result.filter(element => !element.error);
-                    const deviceObjects = successfulResults.map(element => this._mapToDeviceObject(element.value));
+                Promise.all(promises).then((resolved) => {
+                    const successfulResults = resolved.filter((element) => !element.error);
+                    const deviceObjects = successfulResults.map((element) => this._mapToDeviceObject(element.value));
                     this.emit('deviceObjects', device, deviceObjects);
                     resolve(deviceObjects);
                 }).catch((error) => {
@@ -159,88 +486,26 @@ class BacnetClient extends EventEmitter {
         });
     }
 
-    startPolling(device, objects, scheduleExpression) {
-        if (!device || !device.address) {
-            logger.log('warn', `[Polling] Missing device or address, skipping schedule for config: ${JSON.stringify(device)}`);
-            return;
-        }
-        if (!Array.isArray(objects) || objects.length === 0) {
-            logger.log('warn', `[Polling] No objects configured for device ${device.deviceId}, skipping schedule.`);
-            return;
-        }
-        if (!scheduleExpression) {
-            logger.log('warn', `[Polling] No schedule expression provided for device ${device.deviceId}, skipping schedule.`);
-            return;
-        }
-
-        try {
-            scheduleJob(scheduleExpression, () => {
-            const promises = [];
-            objects.forEach(deviceObject => {
-                const objectIdToRead = { type: deviceObject.objectId.type, instance: deviceObject.objectId.instance };
-                promises.push(
-                    this._readObjectPresentValue(device.address, deviceObject.objectId.type, deviceObject.objectId.instance)
-                        .then(res => {
-                            if (res.error) {
-                                logger.log('warn', `[Polling] Error reading ${JSON.stringify(objectIdToRead)}: ${JSON.stringify(res.error)}`);
-                            }
-                            return res;
-                        })
-                );
-            });
-            Promise.all(promises).then((result) => {
-                const values = {};
-                const successfulResults = result.filter(element => {
-                    if (element.error) {
-                        return false;
-                    }
-                    if (!element.value || !element.value.values || element.value.values.length === 0) {
-                        logger.log('warn', `[Polling] Filtering out result with no values: ${JSON.stringify(element.value)}`);
-                        return false;
-                    }
-                    return true;
-                }).map(element => element.value);
-
-                successfulResults.forEach(object => {
-                    if (!object || !object.values || object.values.length === 0 || !object.values[0].values) {
-                        logger.log('warn', `[Polling] Skipping malformed successful result: ${JSON.stringify(object)}`);
-                        return;
-                    }
-                    const objectId = object.values[0].objectId.type + '_' + object.values[0].objectId.instance;
-                    const presentValue = this._findValueById(object.values[0].values, bacnet.enum.PropertyIds.PROP_PRESENT_VALUE);
-                    const objectName = this._findValueById(object.values[0].values, bacnet.enum.PropertyIds.PROP_OBJECT_NAME);
-
-                    values[objectId] = {};
-	                  values[objectId].value = presentValue;
-	                  values[objectId].name = objectName;
-                });
-                this.emit('values', device, values);
-            }).catch(function (error) {
-                logger.log('error', `Error while fetching values: ${error}`);
-            });
-        });
-        } catch (err) {
-            logger.log('error', `[Polling] Failed to schedule job for device ${device.deviceId}: ${err}`);
-        }
+    startPolling(device, objects, pollingOrSchedule) {
+        const pollSettings = typeof pollingOrSchedule === 'string'
+            ? { schedule: pollingOrSchedule }
+            : (pollingOrSchedule || {});
+        const deviceConfig = {
+            device,
+            objects,
+            polling: pollSettings
+        };
+        return this._registerDeviceConfig(deviceConfig);
     }
 
-    saveConfig(config) {
-        this.bacnetConfig.save(config);
+    saveConfig(deviceConfig) {
+        this.bacnetConfig.save(deviceConfig);
+        return this._registerDeviceConfig(deviceConfig);
     }
 
-    /**
-     * Writes a property to a BACnet device.
-     * @param {string} deviceAddress - The IP address of the BACnet device.
-     * @param {object} objectId - The BACnet objectId {type, instance}.
-     * @param {number} propertyId - The BACnet propertyId (e.g., bacnet.enum.PropertyIds.PROP_PRESENT_VALUE).
-     * @param {any} valueToWrite - The value to write.
-     * @param {number} [priority] - Optional write priority (1-16).
-     * @param {number} [bacnetApplicationTag] - Optional BACnet Application Tag for the value.
-     * @returns {Promise<object>} A promise that resolves with the write confirmation or rejects with an error.
-     */
     writeProperty(deviceAddress, objectId, propertyId, valueToWrite, priority, bacnetApplicationTag) {
         return new Promise((resolve, reject) => {
-            let bacnetValue = valueToWrite; 
+            let bacnetValue = valueToWrite;
             let bacnetType;
 
             if (bacnetApplicationTag !== undefined && typeof bacnetApplicationTag === 'number') {
@@ -250,24 +515,20 @@ class BacnetClient extends EventEmitter {
                 }
             } else {
                 if (typeof valueToWrite === 'number') {
-                    if (Number.isInteger(valueToWrite)) {
-                        bacnetType = bacnet.enum.ApplicationTags.BACNET_APPLICATION_TAG_SIGNED_INT;
-                    } else {
-                        bacnetType = bacnet.enum.ApplicationTags.BACNET_APPLICATION_TAG_REAL;
-                    }
+                    bacnetType = Number.isInteger(valueToWrite)
+                        ? bacnet.enum.ApplicationTags.BACNET_APPLICATION_TAG_SIGNED_INT
+                        : bacnet.enum.ApplicationTags.BACNET_APPLICATION_TAG_REAL;
                 } else if (typeof valueToWrite === 'boolean') {
                     bacnetType = bacnet.enum.ApplicationTags.BACNET_APPLICATION_TAG_BOOLEAN;
                     bacnetValue = valueToWrite ? 1 : 0;
                 } else if (typeof valueToWrite === 'string') {
                     const numVal = parseFloat(valueToWrite);
-                    if (!isNaN(numVal)) { 
-                        if (Number.isInteger(numVal)) {
-                            bacnetType = bacnet.enum.ApplicationTags.BACNET_APPLICATION_TAG_SIGNED_INT;
-                        } else {
-                            bacnetType = bacnet.enum.ApplicationTags.BACNET_APPLICATION_TAG_REAL;
-                        }
+                    if (!isNaN(numVal)) {
+                        bacnetType = Number.isInteger(numVal)
+                            ? bacnet.enum.ApplicationTags.BACNET_APPLICATION_TAG_SIGNED_INT
+                            : bacnet.enum.ApplicationTags.BACNET_APPLICATION_TAG_REAL;
                         bacnetValue = numVal;
-                    } else { 
+                    } else {
                         bacnetType = bacnet.enum.ApplicationTags.BACNET_APPLICATION_TAG_CHARACTER_STRING;
                     }
                 } else {
@@ -288,6 +549,29 @@ class BacnetClient extends EventEmitter {
                 }
             });
         });
+    }
+
+    async listRuntimeStates() {
+        return this.runtimeState.listDeviceStates();
+    }
+
+    getStatus() {
+        const avgPollDurationMs = this.metrics.totalPolls > 0
+            ? this.metrics.totalPollDurationMs / this.metrics.totalPolls
+            : 0;
+        return {
+            configuredDevices: this.deviceConfigs.size,
+            activePolls: this.activePolls,
+            queuedPolls: this.queue.length,
+            queueHighWaterMark: this.metrics.queueHighWaterMark,
+            totalPolls: this.metrics.totalPolls,
+            successfulPolls: this.metrics.successfulPolls,
+            failedPolls: this.metrics.failedPolls,
+            totalObjectsRead: this.metrics.totalObjectsRead,
+            totalObjectFailures: this.metrics.totalObjectFailures,
+            avgPollDurationMs,
+            lastPollAt: this.metrics.lastPollAt
+        };
     }
 }
 

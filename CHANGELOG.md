@@ -1,5 +1,14 @@
 # Changelog
 
+## V1.6.0
+
+- Reworked BACnet polling into a bounded scheduler with queueing, device-class intervals, exponential backoff, and circuit breaking to protect large deployments from poll storms.
+- Added SQLite-backed runtime state in `data/runtime.db` to persist device health, last successful polls, and object freshness metadata across restarts.
+- Expanded MQTT output from raw Home Assistant state only to a richer production contract with canonical telemetry topics plus HA attributes topics carrying timestamps and health context.
+- Added runtime and observability improvements: richer `/health`, expanded Prometheus `/metrics`, and a new `/api/bacnet/runtime` endpoint.
+- Extended polling config to support `class`, `intervalMs`, and `freshnessMs`, and updated validation/docs around large-scale production tuning.
+- Added broader automated test coverage for BACnet polling, MQTT telemetry publishing, runtime state persistence, server metrics, and shared model helpers.
+
 ## V1.5.3
 
 - Fix tar vulnerability by pinning tar to 7.5.3 via npm overrides.
