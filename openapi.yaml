@@ -1,8 +1,8 @@
 openapi: 3.0.0
 info:
   title: BACnet MQTT Gateway API
-  version: 1.0.1
-  description: API for managing and interacting with the BACnet MQTT Gateway.
+  version: 1.6.0
+  description: API for managing and interacting with the BACnet MQTT Gateway, including runtime health for production deployments.
 
 servers:
   - url: http://localhost:{port} 
@@ -28,9 +28,22 @@ components:
     DeviceConfigPolling:
       type: object
       properties:
+        class:
+          type: string
+          description: Polling class used by the bounded scheduler.
+          enum: [fast, normal, slow]
+          example: fast
+        intervalMs:
+          type: integer
+          description: Explicit polling interval in milliseconds.
+          example: 5000
+        freshnessMs:
+          type: integer
+          description: Maximum age in milliseconds before downstream systems should treat the value as stale.
+          example: 15000
         schedule:
           type: string
-          description: Cron-style schedule expression for polling.
+          description: Optional cron-style schedule expression for polling.
           example: "*/15 * * * * *"
     DeviceConfigObject:
       type: object
@@ -236,6 +249,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/bacnet/runtime:
+    get:
+      summary: List runtime BACnet device state
+      description: Returns persisted runtime device health, circuit breaker state, and last successful poll metadata.
+      responses:
+        '200':
+          description: Runtime state entries for configured devices.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
 
   /api/bacnet/write:
     put:

@@ -1,6 +1,6 @@
 # BACnet MQTT Gateway
 
-BACnet MQTT Gateway is gateway that connects BACnet devices via MQTT to the cloud. It is written in Javascript and uses node.
+BACnet MQTT Gateway connects BACnet devices to MQTT and is designed to survive production conditions, not just lab demos. It is written in Node.js and now includes bounded polling, SQLite-backed runtime state, explicit freshness metadata, and operational metrics for larger deployments.
 
 For BACnet connection the [Node BACstack](https://github.com/fh1ch/node-bacstack) is used.
 
@@ -25,12 +25,15 @@ The auth database lives in `./data` (mounted), so credentials persist across res
 * Discover BACnet devices in network (WhoIs)
 * Read object list from BACnet device (Read Property)
 * Read present value from defined list of BACnet objects and send it to an MQTT broker
+* Bounded polling scheduler with queueing, device classes, backoff, and circuit breaking
+* SQLite runtime state for device health, last successful polls, and persisted telemetry metadata
 * Write to BACnet object properties via MQTT or Web UI
     * Configurable Property ID, Write Priority, and BACnet Application Tag for writes.
     * MQTT feedback for write success/failure.
 * REST and web interface for configuration and interaction
     * Web UI includes a "Stop Scan" button for device discovery.
 * API documentation via Swagger UI.
+* Production health and Prometheus metrics for queue depth, stale state, and device health
 
 ## Getting started
 
@@ -65,6 +68,15 @@ The auth database lives in `./data` (mounted), so credentials persist across res
     # Set BACNET_MAX_SEGMENTS=0 to disable segmentation if the target device doesn't support it.
     BACNET_MAX_SEGMENTS=112
     BACNET_MAX_ADPU=5
+
+    # Polling / Runtime State
+    POLLING_GLOBAL_CONCURRENCY=2
+    POLLING_OBJECT_CONCURRENCY=4
+    POLLING_DEFAULT_FRESHNESS_MS=30000
+    POLLING_FAILURE_THRESHOLD=3
+    POLLING_BASE_BACKOFF_MS=5000
+    POLLING_MAX_BACKOFF_MS=120000
+    RUNTIME_DB_PATH=./data/runtime.db
 
     # Optional MQTT TLS
     MQTT_TLS_ENABLED=false
@@ -126,7 +138,9 @@ The gateway can poll BACnet object present values and send the values via MQTT i
         "address": "192.168.178.55"
     },
     "polling": {
-        "schedule": "*/15 * * * * *"
+        "class": "fast",
+        "intervalMs": 5000,
+        "freshnessMs": 15000
     },
     "objects": [{
         "objectId": {
@@ -142,7 +156,15 @@ The gateway can poll BACnet object present values and send the values via MQTT i
 }
 ```
 
-You need to define the device id, ip address, schedule interval (as CRON expression) and the objects to poll.
+You need to define the device id, IP address, either a polling class or explicit interval/schedule, and the objects to poll.
+
+Recommended production approach:
+
+* `fast` for occupancy, temperatures, and business-critical signals
+* `normal` for standard equipment state
+* `slow` for setpoints and low-churn points
+
+The gateway now queues device polls, bounds concurrent BACnet work, applies exponential backoff on repeated failure, and opens per-device circuit breakers when a controller becomes unhealthy.
 
 When the gateway is started it automatically reads the list of files from the directory and starts the polling for all devices.
  
@@ -204,8 +226,9 @@ The following endpoints are supported:
     }
     ```
 
-* `GET /health`: Basic health check for MQTT connectivity and configured BACnet devices.
-* `GET /metrics`: Prometheus-format metrics for MQTT connectivity and configured device count.
+* `GET /health`: Health check including MQTT status, queue depth, stale object counts, and open circuit counts.
+* `GET /metrics`: Prometheus-format metrics for MQTT connectivity, queue depth, poll totals, stale objects, and runtime device health.
+* `GET /api/bacnet/runtime`: Persisted runtime device state from SQLite.
 
 For a complete and interactive API specification, please refer to the Swagger UI documentation available at `/api-docs` when the gateway is running.
 
@@ -213,10 +236,17 @@ For a complete and interactive API specification, please refer to the Swagger UI
 
 ### Reading Data (Polling)
 
-Polled BACnet object values are published to MQTT topics, typically structured for Home Assistant integration:
-`homeassistant/<component_type>/<gateway_id>/<objectType>_<objectInstance>/state`
-Example: `homeassistant/sensor/my_bacnet_gateway_1/2_202/state`
-The payload is the JSON stringified value of the object's Present\_Value.
+Polled BACnet object values are published to multiple MQTT topic families:
+
+* Home Assistant state: `homeassistant/<component_type>/<gateway_id>/<objectType>_<objectInstance>/state`
+* Home Assistant attributes: `homeassistant/<component_type>/<gateway_id>/<objectType>_<objectInstance>/attributes`
+* Canonical gateway telemetry: `bacnet-gateway/<gateway_id>/telemetry/<device_id>/<objectType>_<objectInstance>`
+
+Example state topic: `homeassistant/sensor/my_bacnet_gateway_1/2_202/state`
+
+Example canonical topic: `bacnet-gateway/my_bacnet_gateway_1/telemetry/114/2_202`
+
+The canonical telemetry payload includes `value`, `name`, `deviceId`, `address`, `acquiredAt`, `publishedAt`, `freshnessMs`, `sourceStatus`, `pollDurationMs`, and `pollClass`.
 
 Home Assistant discovery example (sensor):
 ```yaml
@@ -296,10 +326,11 @@ BACnet Devices (HVAC, Lighting, Meters)
 ┌───────────────────────────────────┐
 │      bacnet-mqtt-gateway          │
 │  ┌─────────────────────────────┐  │
-│  │ Device Discovery (WhoIs)    │  │
-│  │ Object Polling (cron-based) │  │
-│  │ Write Support (priority)    │  │
-│  │ REST API + Web UI           │  │
+│  │ Device Discovery (WhoIs)          │  │
+│  │ Bounded Poll Scheduler + Backoff  │  │
+│  │ SQLite Runtime State              │  │
+│  │ Write Support (priority)          │  │
+│  │ REST API + Web UI + Metrics       │  │
 │  └─────────────────────────────┘  │
 └───────────────────────────────────┘
         │
@@ -311,14 +342,14 @@ BACnet Devices (HVAC, Lighting, Meters)
 ### Key Capabilities
 
 - **Bidirectional** — read (polling) and write (commands) to BACnet objects
-- **Home Assistant friendly** — topics structured for auto-discovery
-- **Production ready** — JWT auth, health endpoints, Prometheus metrics
-- **Configurable** — per-device polling schedules, write priorities, BACnet tags
+- **Home Assistant friendly** — state plus metadata topics for downstream consumers
+- **Production ready** — JWT auth, SQLite runtime state, health endpoints, Prometheus metrics
+- **Configurable** — per-device polling classes, schedules, freshness thresholds, write priorities, BACnet tags
 - **Containerized** — Docker image + Compose for easy deployment
 
 ### Where It Fits
 
-This gateway is a **protocol adapter** — the edge layer that normalizes building automation data before it reaches your IoT platform, streaming pipeline, or data lake.
+This gateway is a **reliability layer around a protocol bridge** — the edge layer that normalizes building automation data before it reaches your IoT platform, streaming pipeline, or data lake.
 ```
 BACnet → bacnet-mqtt-gateway → MQTT Broker → Infinimesh / Kafka / Flink → Iceberg
 ```

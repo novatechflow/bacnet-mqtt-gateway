@@ -1,7 +1,7 @@
 {
   "name": "bacnet-mqtt-gateway",
-  "version": "1.5.3",
-  "description": "MQTT - BACnet gateway",
+  "version": "1.6.0",
+  "description": "Production-ready BACnet to MQTT gateway with bounded polling, SQLite runtime state, and observability",
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
@@ -41,7 +41,7 @@
   "keywords": [
     "bacnet",
     "mqtt",
-    "infinimesh",
+    "building-automation",
     "iiot",
     "iot",
     "smartcity",
