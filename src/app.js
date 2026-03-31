@@ -60,6 +60,7 @@ mqttClient.on('bacnetWriteCommand', (command) => {
 
 async function init() {
     try {
+        await bacnetClient.ready;
         const seededPassword = await authService.init();
         if (seededPassword) {
             logger.log('info', `[Auth] Initial admin user 'admin' created with password: ${seededPassword}`);
