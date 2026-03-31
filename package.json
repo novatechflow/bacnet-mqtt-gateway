@@ -9,9 +9,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "git://github.com/infinimesh/bacnet-mqtt-gateway.git"
+    "url": "git://github.com/novatechflow/bacnet-mqtt-gateway.git"
   },
-  "author": "Infinite Devices",
+  "author": "Alexander Alten (novatechflow.com)",
   "license": "Apache-2.0",
   "dependencies": {
     "bacstack": "0.0.1-beta.13",
@@ -35,9 +35,9 @@
     "yamljs": "^0.3.0"
   },
   "bugs": {
-    "url": "https://github.com/infinimesh/bacnet-mqtt-gateway/issues"
+    "url": "https://github.com/novatechflow/bacnet-mqtt-gateway/issues"
   },
-  "homepage": "https://github.com/infinimesh/bacnet-mqtt-gateway#readme",
+  "homepage": "https://github.com/novatechflow/bacnet-mqtt-gateway#readme",
   "keywords": [
     "bacnet",
     "mqtt",
