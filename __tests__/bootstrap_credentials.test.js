@@ -37,4 +37,16 @@ describe('bootstrap credentials delivery', () => {
         fs.rmSync(filePath, { force: true });
         fs.rmSync(require('path').dirname(filePath), { recursive: true, force: true });
     });
+
+    test('creates the secure file even when no writable stderr is provided', () => {
+        const { deliverInitialAdminPassword } = require('../src/bootstrap_credentials');
+
+        const filePath = deliverInitialAdminPassword('admin', 'silent-secret', { stderr: {} });
+        const fileContent = fs.readFileSync(filePath, 'utf8');
+
+        expect(fileContent).toContain('password=silent-secret');
+
+        fs.rmSync(filePath, { force: true });
+        fs.rmSync(require('path').dirname(filePath), { recursive: true, force: true });
+    });
 });

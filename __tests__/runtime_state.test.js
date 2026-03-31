@@ -137,4 +137,18 @@ describe('RuntimeState', () => {
             openCircuits: 1
         }));
     });
+
+    test('db helper methods reject database errors', async () => {
+        const { RuntimeState } = require('../src/runtime_state');
+        const state = new RuntimeState();
+        await state.init();
+
+        state.db.run = jest.fn((_sql, _params, cb) => cb(new Error('run failed')));
+        state.db.get = jest.fn((_sql, _params, cb) => cb(new Error('get failed')));
+        state.db.all = jest.fn((_sql, _params, cb) => cb(new Error('all failed')));
+
+        await expect(state.run('SELECT 1')).rejects.toThrow('run failed');
+        await expect(state.get('SELECT 1')).rejects.toThrow('get failed');
+        await expect(state.all('SELECT 1')).rejects.toThrow('all failed');
+    });
 });

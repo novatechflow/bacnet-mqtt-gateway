@@ -71,4 +71,75 @@ describe('BacnetConfig', () => {
             expect.stringContaining('Error while parsing config file')
         );
     });
+
+    test('load skips deactivated files and logs the skip', async () => {
+        const activePath = path.join(tempDir, 'device.3.json');
+        const inactivePath = path.join(tempDir, '_device.4.json');
+        fs.writeFileSync(activePath, JSON.stringify({ device: { deviceId: 3 } }));
+        fs.writeFileSync(inactivePath, JSON.stringify({ device: { deviceId: 4 } }));
+
+        const { BacnetConfig } = loadModule();
+        const config = new BacnetConfig();
+        const loaded = [];
+
+        config.on('configLoaded', (cfg) => loaded.push(cfg));
+        config.load();
+
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        expect(loaded).toHaveLength(1);
+        expect(loaded[0].device.deviceId).toBe(3);
+        expect(loggerMock.log).toHaveBeenCalledWith(
+            'info',
+            expect.stringContaining('Skipping deactivated file _device.4.json')
+        );
+    });
+
+    test('save writes config file and logs success', async () => {
+        const { BacnetConfig } = loadModule();
+        const config = new BacnetConfig();
+        const deviceConfig = {
+            device: { deviceId: 9, address: '192.168.1.9' },
+            polling: { class: 'normal' },
+            objects: [{ objectId: { type: 2, instance: 200 } }]
+        };
+
+        config.save(deviceConfig);
+
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        const savedPath = path.join(tempDir, 'device.9.json');
+        expect(JSON.parse(fs.readFileSync(savedPath, 'utf8'))).toEqual(deviceConfig);
+        expect(loggerMock.log).toHaveBeenCalledWith(
+            'info',
+            "Config file 'device.9.json' successfully saved."
+        );
+    });
+
+    test('delete rejects when config file does not exist', async () => {
+        const { BacnetConfig } = loadModule();
+        const config = new BacnetConfig();
+
+        await expect(config.delete(404)).rejects.toBeTruthy();
+        expect(loggerMock.log).toHaveBeenCalledWith(
+            'error',
+            expect.stringContaining("Error while deleting config file")
+        );
+    });
+
+    test('load logs folder read errors', async () => {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+
+        const { BacnetConfig } = loadModule();
+        const config = new BacnetConfig();
+
+        config.load();
+
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        expect(loggerMock.log).toHaveBeenCalledWith(
+            'error',
+            expect.stringContaining('Error while reading config folder')
+        );
+    });
 });

@@ -203,4 +203,82 @@ describe('MqttClient', () => {
             expect.any(Function)
         );
     });
+
+    test('client tracks connection errors and offline lifecycle events', async () => {
+        const { MqttClient } = require('../src/mqtt_client');
+        const client = new MqttClient();
+
+        mqttMocks.clientInstance.emit('connect');
+        mqttMocks.clientInstance.emit('error', new Error('broker down'));
+        expect(client.getStatus()).toEqual(expect.objectContaining({
+            connected: false,
+            lastError: 'broker down'
+        }));
+
+        mqttMocks.clientInstance.emit('offline');
+        expect(client.getStatus().connected).toBe(false);
+        mqttMocks.clientInstance.emit('reconnect');
+        expect(client.getStatus().connected).toBe(false);
+        mqttMocks.clientInstance.emit('close');
+        expect(client.getStatus().connected).toBe(false);
+    });
+
+    test('publish tracks publish failures', async () => {
+        const { MqttClient } = require('../src/mqtt_client');
+        const client = new MqttClient();
+        mqttMocks.clientInstance.publish = jest.fn((topic, message, options, cb) => cb(new Error('publish failed')));
+
+        client.publishMessage({ deviceId: '114', address: '192.168.1.10' });
+
+        expect(client.getStatus()).toEqual(expect.objectContaining({
+            publishFailureCount: 1,
+            lastError: 'publish failed'
+        }));
+    });
+
+    test('subscribe errors are tolerated on connect', async () => {
+        mqttMocks.subscribeMock.mockImplementationOnce((pattern, cb) => cb(new Error('subscribe failed')));
+        const { MqttClient } = require('../src/mqtt_client');
+        const client = new MqttClient();
+
+        mqttMocks.clientInstance.emit('connect');
+
+        expect(client.getStatus().connected).toBe(true);
+    });
+
+    test('tls options are applied from config when enabled', async () => {
+        jest.doMock('fs', () => ({
+            readFileSync: jest.fn((filePath) => Buffer.from(`data:${filePath}`))
+        }));
+        process.env.NODE_CONFIG = JSON.stringify({
+            mqtt: {
+                gatewayId: 'test-gw',
+                host: 'localhost',
+                port: 8883,
+                username: 'u',
+                password: 'p',
+                tls: {
+                    enabled: true,
+                    caPath: '/tmp/ca.pem',
+                    certPath: '/tmp/cert.pem',
+                    keyPath: '/tmp/key.pem',
+                    rejectUnauthorized: false
+                }
+            }
+        });
+        jest.resetModules();
+        mqttMocks = require('mqtt').__getMocks();
+        const mqttModule = require('mqtt');
+        const { MqttClient } = require('../src/mqtt_client');
+
+        new MqttClient();
+
+        expect(mqttModule.connect).toHaveBeenCalledWith(expect.objectContaining({
+            protocol: 'mqtts',
+            ca: Buffer.from('data:/tmp/ca.pem'),
+            cert: Buffer.from('data:/tmp/cert.pem'),
+            key: Buffer.from('data:/tmp/key.pem'),
+            rejectUnauthorized: false
+        }));
+    });
 });

@@ -1,5 +1,7 @@
 describe('Server helper methods', () => {
     let Server;
+    let expressApp;
+    let rateLimitMock;
 
     beforeEach(() => {
         process.env.NODE_CONFIG_STRICT_MODE = '0';
@@ -9,14 +11,14 @@ describe('Server helper methods', () => {
         });
         jest.resetModules();
         jest.doMock('express', () => {
-            const app = {
+            expressApp = {
                 use: jest.fn(),
                 post: jest.fn(),
                 get: jest.fn(),
                 put: jest.fn(),
                 listen: jest.fn()
             };
-            const express = () => app;
+            const express = () => expressApp;
             express.static = jest.fn(() => jest.fn());
             return express;
         });
@@ -24,7 +26,10 @@ describe('Server helper methods', () => {
         jest.doMock('body-parser', () => ({ json: jest.fn(() => jest.fn()) }));
         jest.doMock('swagger-ui-express', () => ({ serve: jest.fn(), setup: jest.fn(() => jest.fn()) }));
         jest.doMock('yamljs', () => ({ load: jest.fn(() => ({})) }));
-        jest.doMock('express-rate-limit', () => jest.fn(() => jest.fn()));
+        jest.doMock('express-rate-limit', () => {
+            rateLimitMock = jest.fn(() => jest.fn());
+            return rateLimitMock;
+        });
         jest.doMock('../src/common', () => ({
             logger: { log: jest.fn() }
         }));
@@ -57,6 +62,50 @@ describe('Server helper methods', () => {
             }
         };
     }
+
+    test('constructor wires routes and starts listening', () => {
+        const bacnetClient = {};
+        const mqttClient = {};
+        const authService = {};
+
+        new Server(bacnetClient, mqttClient, authService);
+
+        expect(rateLimitMock).toHaveBeenCalledWith(expect.objectContaining({
+            windowMs: 15 * 60 * 1000,
+            max: 30
+        }));
+        expect(expressApp.post).toHaveBeenCalledWith('/auth/login', expect.any(Function), expect.any(Function));
+        expect(expressApp.get).toHaveBeenCalledWith('/health', expect.any(Function));
+        expect(expressApp.get).toHaveBeenCalledWith('/metrics', expect.any(Function));
+        expect(expressApp.put).toHaveBeenCalledWith('/api/bacnet/write', expect.any(Function), expect.any(Function));
+        expect(expressApp.listen).toHaveBeenCalledWith(8082, expect.any(Function));
+        expressApp.listen.mock.calls[0][1]();
+    });
+
+    test('scanForDevices collects discovered devices and responds after timeout', () => {
+        jest.useFakeTimers();
+        const { EventEmitter } = require('events');
+        const bacnetClient = new EventEmitter();
+        bacnetClient.scanForDevices = jest.fn(() => {
+            bacnetClient.emit('deviceFound', { deviceId: 1, address: '10.0.0.1' });
+            bacnetClient.emit('deviceFound', { deviceId: 2, address: '10.0.0.2' });
+        });
+        const removeListenerSpy = jest.spyOn(bacnetClient, 'removeListener');
+        const server = Object.create(Server.prototype);
+        server.bacnetClient = bacnetClient;
+        const res = createResponse();
+
+        server._scanForDevices({}, res);
+        jest.advanceTimersByTime(5000);
+
+        expect(bacnetClient.scanForDevices).toHaveBeenCalled();
+        expect(removeListenerSpy).toHaveBeenCalledWith('deviceFound', expect.any(Function));
+        expect(res.payload).toEqual([
+            { deviceId: 1, address: '10.0.0.1' },
+            { deviceId: 2, address: '10.0.0.2' }
+        ]);
+        jest.useRealTimers();
+    });
 
     test('health includes runtime summary and degraded status', async () => {
         const server = Object.create(Server.prototype);
@@ -268,6 +317,37 @@ describe('Server helper methods', () => {
         expect(res.payload.message).toContain('write failed');
     });
 
+    test('writeProperty accepts valid priority and application tag', async () => {
+        const server = Object.create(Server.prototype);
+        server.bacnetClient = {
+            deviceConfigs: new Map([['114', { device: { address: '192.168.1.10' } }]]),
+            writeProperty: jest.fn().mockResolvedValue({ ok: true })
+        };
+        const res = createResponse();
+
+        await server._writeProperty({
+            body: {
+                deviceId: '114',
+                objectType: '1',
+                objectInstance: '0',
+                propertyId: '85',
+                value: 1,
+                priority: '8',
+                bacnetApplicationTag: '4'
+            }
+        }, res);
+
+        expect(server.bacnetClient.writeProperty).toHaveBeenCalledWith(
+            '192.168.1.10',
+            { type: 1, instance: 0 },
+            85,
+            1,
+            8,
+            4
+        );
+        expect(res.statusCode).toBe(200);
+    });
+
     test('login returns token pair for valid credentials', async () => {
         const server = Object.create(Server.prototype);
         server.authService = {
@@ -450,5 +530,18 @@ describe('Server helper methods', () => {
         await server._register({ body: { username: 'new-user', password: 'secret' } }, okRes);
         expect(okRes.statusCode).toBe(201);
         expect(okRes.payload.user.username).toBe('new-user');
+    });
+
+    test('register returns 400 when user creation fails', async () => {
+        const server = Object.create(Server.prototype);
+        server.authService = {
+            createUser: jest.fn().mockRejectedValue(new Error('duplicate username'))
+        };
+        const res = createResponse();
+
+        await server._register({ body: { username: 'existing', password: 'secret' } }, res);
+
+        expect(res.statusCode).toBe(400);
+        expect(res.payload.details).toBe('duplicate username');
     });
 });
