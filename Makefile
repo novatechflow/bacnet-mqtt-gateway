@@ -23,6 +23,7 @@ dev-logs:
 	docker-compose logs -f
 
 test:
+	node --check web/admin.js
 	npm test -- --coverage
 
 codeql:
