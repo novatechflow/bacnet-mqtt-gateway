@@ -31,6 +31,12 @@ class Server {
             standardHeaders: true,
             legacyHeaders: false
         });
+        const apiLimiter = rateLimit({
+            windowMs: 60 * 1000,
+            max: 120,
+            standardHeaders: true,
+            legacyHeaders: false
+        });
 
         // auth routes
         this.app.post('/auth/login', authLimiter, this._login.bind(this));
@@ -43,12 +49,12 @@ class Server {
         this.app.get('/metrics', this._metrics.bind(this));
 
         // protected API
-        this.app.put('/api/bacnet/scan', this._requireRole('viewer'), this._scanForDevices.bind(this));
-        this.app.put('/api/bacnet/:deviceId/objects', this._requireRole('viewer'), this._scanDevice.bind(this));
-        this.app.get('/api/bacnet/configured', this._requireRole('viewer'), this._listConfigured.bind(this));
-        this.app.get('/api/bacnet/runtime', this._requireRole('viewer'), this._listRuntime.bind(this));
-        this.app.put('/api/bacnet/:deviceId/config', this._requireRole('admin'), this._configurePolling.bind(this));
-        this.app.put('/api/bacnet/write', this._requireRole('admin'), this._writeProperty.bind(this)); 
+        this.app.put('/api/bacnet/scan', apiLimiter, this._requireRole('viewer'), this._scanForDevices.bind(this));
+        this.app.put('/api/bacnet/:deviceId/objects', apiLimiter, this._requireRole('viewer'), this._scanDevice.bind(this));
+        this.app.get('/api/bacnet/configured', apiLimiter, this._requireRole('viewer'), this._listConfigured.bind(this));
+        this.app.get('/api/bacnet/runtime', apiLimiter, this._requireRole('viewer'), this._listRuntime.bind(this));
+        this.app.put('/api/bacnet/:deviceId/config', apiLimiter, this._requireRole('admin'), this._configurePolling.bind(this));
+        this.app.put('/api/bacnet/write', apiLimiter, this._requireRole('admin'), this._writeProperty.bind(this)); 
 
         // start server
         this.app.listen(port, () => {

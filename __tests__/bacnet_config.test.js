@@ -142,4 +142,25 @@ describe('BacnetConfig', () => {
             expect.stringContaining('Error while reading config folder')
         );
     });
+
+    test('buildConfigPath rejects invalid device ids outside safe filename set', () => {
+        const { BacnetConfig } = loadModule();
+        const config = new BacnetConfig();
+
+        expect(() => config._buildConfigPath('../escape')).toThrow('Invalid deviceId for config path');
+        expect(() => config._buildConfigPath('device/1')).toThrow('Invalid deviceId for config path');
+    });
+
+    test('save and delete reject invalid device ids early', async () => {
+        const { BacnetConfig } = loadModule();
+        const config = new BacnetConfig();
+
+        config.save({ device: { deviceId: '../escape' } });
+        await expect(config.delete('../escape')).rejects.toThrow('Invalid deviceId for config path');
+
+        expect(loggerMock.log).toHaveBeenCalledWith(
+            'error',
+            expect.stringContaining('Error while resolving config file path')
+        );
+    });
 });

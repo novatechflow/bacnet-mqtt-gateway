@@ -74,10 +74,14 @@ describe('Server helper methods', () => {
             windowMs: 15 * 60 * 1000,
             max: 30
         }));
+        expect(rateLimitMock).toHaveBeenCalledWith(expect.objectContaining({
+            windowMs: 60 * 1000,
+            max: 120
+        }));
         expect(expressApp.post).toHaveBeenCalledWith('/auth/login', expect.any(Function), expect.any(Function));
         expect(expressApp.get).toHaveBeenCalledWith('/health', expect.any(Function));
         expect(expressApp.get).toHaveBeenCalledWith('/metrics', expect.any(Function));
-        expect(expressApp.put).toHaveBeenCalledWith('/api/bacnet/write', expect.any(Function), expect.any(Function));
+        expect(expressApp.put).toHaveBeenCalledWith('/api/bacnet/write', expect.any(Function), expect.any(Function), expect.any(Function));
         expect(expressApp.listen).toHaveBeenCalledWith(8082, expect.any(Function));
         expressApp.listen.mock.calls[0][1]();
     });
