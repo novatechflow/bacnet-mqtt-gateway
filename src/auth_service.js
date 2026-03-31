@@ -30,6 +30,10 @@ class AuthService {
         return this.initialAdminPassword;
     }
 
+    _generateRandomPassword() {
+        return crypto.randomBytes(12).toString('base64url');
+    }
+
     _openDb() {
         return new Promise((resolve, reject) => {
             const dir = path.dirname(this.dbPath);
@@ -86,7 +90,7 @@ class AuthService {
                     resolve();
                     return;
                 }
-                const password = crypto.randomBytes(12).toString('base64url');
+                const password = this._generateRandomPassword();
                 const hash = await bcrypt.hash(password, 10);
                 this.db.run(
                     'INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
@@ -97,7 +101,7 @@ class AuthService {
                             reject(insertErr);
                         } else {
                             this.initialAdminPassword = password;
-                            logger.log('info', `[Auth] Seeded admin user with random password: ${password}`);
+                            logger.log('info', '[Auth] Seeded initial admin user.');
                             resolve();
                         }
                     }
@@ -260,6 +264,36 @@ class AuthService {
                 }
             });
         });
+    }
+
+    async setPassword(userId, newPassword) {
+        const user = await this.findUserById(userId);
+        if (!user) {
+            throw new Error('User not found');
+        }
+        const hash = await bcrypt.hash(newPassword, 10);
+        return new Promise((resolve, reject) => {
+            this.db.run('UPDATE users SET password = ? WHERE id = ?', [hash, userId], function(err) {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve();
+                }
+            });
+        });
+    }
+
+    async resetAdminPassword(username = 'admin') {
+        const password = this._generateRandomPassword();
+        const user = await this.findUser(username);
+
+        if (!user) {
+            await this.createUser(username, password, 'admin');
+            return password;
+        }
+
+        await this.setPassword(user.id, password);
+        return password;
     }
 }
 

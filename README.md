@@ -97,7 +97,15 @@ TLS is optional: set `MQTT_TLS_ENABLED=true` and point to CA/client cert/key pat
 
 ### Auth
 
-On first startup, the gateway seeds an `admin` user with a **random password** and logs it once. Change it immediately by creating a new admin and deleting the default if desired.
+On first startup, the gateway seeds an `admin` user with a **random password**. It is not written to the normal JSON logger anymore.
+
+If startup is attached to a TTY, the password is printed once directly to stderr and also written to a `0600` file in the system temp directory. In non-interactive environments, only the secure file path is printed. Change the password immediately after first login.
+
+Password retrieval and recovery:
+- Interactive startup: read the one-time stderr output and change the password immediately.
+- Non-interactive startup: read the secure temp file path printed to stderr, then inspect that file on the host. The file is created with mode `0600`.
+- Manual reset: run `npm run reset-admin` in the gateway environment. This generates a new random password for `admin` and delivers it through the same secure bootstrap path.
+- Container reset example: `docker compose exec gateway npm run reset-admin`
 
 Auth endpoints:
 - `POST /auth/login` with `{ "username": "...", "password": "..." }` → returns JWT + refresh token.
@@ -107,13 +115,18 @@ Auth endpoints:
 Use the JWT in `Authorization: Bearer <token>` for all `/api/*` routes.
 Health/metrics endpoints (`/health`, `/metrics`) remain unauthenticated.
 
-Resetting the seeded admin password (if forgotten): stop the stack and delete the auth DB, or delete only the admin row to trigger reseed on next start:
+Resetting the seeded admin password without deleting the auth database:
 ```bash
-docker-compose down
-sqlite3 data/auth.db "DELETE FROM users WHERE username='admin';"
-docker-compose up -d --build
+npm run reset-admin
 ```
-The gateway will log a fresh random admin password on startup.
+
+If the auth database is damaged or you intentionally want a full reseed, you can still remove the admin row and restart:
+```bash
+docker compose down
+sqlite3 data/auth.db "DELETE FROM users WHERE username='admin';"
+docker compose up -d --build
+```
+The gateway will then generate a fresh random admin password on startup and deliver it through the one-time bootstrap credential output described above.
 
 ## Changelog
 
