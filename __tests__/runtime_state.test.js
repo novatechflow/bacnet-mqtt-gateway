@@ -72,4 +72,69 @@ describe('RuntimeState', () => {
         expect(summary.configuredDevices).toBe(1);
         expect(summary.staleObjects).toBe(1);
     });
+
+    test('returns null for unknown object state and lists parsed objects', async () => {
+        const { RuntimeState } = require('../src/runtime_state');
+        const state = new RuntimeState();
+        await state.init();
+
+        await expect(state.getLatestObjectState('114', '2_999')).resolves.toBeNull();
+
+        await state.saveObjectTelemetry('114', '2_201', {
+            value: true,
+            name: 'Occupied',
+            acquiredAt: Date.now(),
+            publishedAt: Date.now(),
+            freshnessMs: 5000,
+            sourceStatus: 'fresh',
+            pollDurationMs: 10
+        });
+        await state.saveObjectTelemetry('114', '2_202', {
+            value: 21.5,
+            name: 'Temp',
+            acquiredAt: Date.now(),
+            publishedAt: Date.now(),
+            freshnessMs: 5000,
+            sourceStatus: 'fresh',
+            pollDurationMs: 11
+        });
+
+        const rows = await state.listObjectStates('114');
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]).toEqual(expect.objectContaining({ object_key: '2_201', value: true }));
+        expect(rows[1]).toEqual(expect.objectContaining({ object_key: '2_202', value: 21.5 }));
+    });
+
+    test('summarizes healthy, degraded, and open-circuit devices', async () => {
+        const { RuntimeState } = require('../src/runtime_state');
+        const state = new RuntimeState();
+        await state.init();
+
+        await state.upsertDeviceState({
+            deviceId: '100',
+            address: '10.0.0.1',
+            pollClass: 'fast',
+            circuitState: 'closed',
+            consecutiveFailures: 0
+        });
+        await state.upsertDeviceState({
+            deviceId: '101',
+            address: '10.0.0.2',
+            pollClass: 'normal',
+            circuitState: 'open',
+            consecutiveFailures: 3
+        });
+
+        const states = await state.listDeviceStates();
+        const summary = await state.getMetricsSummary();
+
+        expect(states).toHaveLength(2);
+        expect(summary).toEqual(expect.objectContaining({
+            configuredDevices: 2,
+            healthyDevices: 1,
+            degradedDevices: 1,
+            openCircuits: 1
+        }));
+    });
 });

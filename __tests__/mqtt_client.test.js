@@ -140,4 +140,67 @@ describe('MqttClient', () => {
             bacnetApplicationTag: undefined
         });
     });
+
+    test('onConnect subscribes and updates connection status', async () => {
+        const { MqttClient } = require('../src/mqtt_client');
+        const client = new MqttClient();
+
+        mqttMocks.clientInstance.emit('connect');
+
+        expect(mqttMocks.subscribeMock).toHaveBeenCalledWith(
+            'bacnetwrite/test-gw/+/+/+/set',
+            expect.any(Function)
+        );
+        expect(client.getStatus().connected).toBe(true);
+    });
+
+    test('onMessage ignores malformed topics and missing values', async () => {
+        const { MqttClient } = require('../src/mqtt_client');
+        const client = new MqttClient();
+        mqttMocks.clientInstance.emit('connect');
+        const handler = jest.fn();
+        client.on('bacnetWriteCommand', handler);
+
+        mqttMocks.clientInstance.emit('message', 'bacnetwrite/test-gw/114/badkey/85/set', Buffer.from('{"value":1}'));
+        mqttMocks.clientInstance.emit('message', 'bacnetwrite/test-gw/114/x_0/85/set', Buffer.from('{"value":1}'));
+        mqttMocks.clientInstance.emit('message', 'bacnetwrite/test-gw/114/1_0/85/set', Buffer.from('{"priority":8}'));
+
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    test('onMessage falls back to raw message string for non-JSON payloads', async () => {
+        const { MqttClient } = require('../src/mqtt_client');
+        const client = new MqttClient();
+        mqttMocks.clientInstance.emit('connect');
+        const handler = jest.fn();
+        client.on('bacnetWriteCommand', handler);
+
+        mqttMocks.clientInstance.emit('message', 'bacnetwrite/test-gw/114/1_0/85/set', Buffer.from('plain-text'));
+
+        expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+            value: 'plain-text'
+        }));
+    });
+
+    test('publishMessage publishes discovered devices and unknown payloads', async () => {
+        const { MqttClient } = require('../src/mqtt_client');
+        const client = new MqttClient();
+        mqttMocks.clientInstance.emit('connect');
+
+        client.publishMessage({ deviceId: '114', address: '192.168.1.10' });
+        client.publishMessage('unexpected-payload');
+
+        expect(mqttMocks.publishMock).toHaveBeenCalledWith(
+            'bacnet-gateway/test-gw/device_found/114',
+            JSON.stringify({ deviceId: '114', address: '192.168.1.10' }),
+            { retain: true },
+            expect.any(Function)
+        );
+        expect(mqttMocks.publishMock).toHaveBeenCalledWith(
+            'bacnet-gateway/test-gw/unknown_data',
+            JSON.stringify('unexpected-payload'),
+            {},
+            expect.any(Function)
+        );
+    });
 });

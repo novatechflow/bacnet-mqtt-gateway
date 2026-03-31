@@ -182,6 +182,19 @@ describe('Server helper methods', () => {
         expect(res.payload).toEqual([{ device_id: '114', circuit_state: 'closed' }]);
     });
 
+    test('listRuntime returns 500 on runtime state failure', async () => {
+        const server = Object.create(Server.prototype);
+        server.bacnetClient = {
+            listRuntimeStates: jest.fn().mockRejectedValue(new Error('db down'))
+        };
+        const res = createResponse();
+
+        await server._listRuntime({}, res);
+
+        expect(res.statusCode).toBe(500);
+        expect(res.payload.message).toBe('Failed to fetch runtime states');
+    });
+
     test('configure polling rejects invalid payload', () => {
         const server = Object.create(Server.prototype);
         server.bacnetClient = {
@@ -223,6 +236,38 @@ describe('Server helper methods', () => {
         expect(res.statusCode).toBe(404);
     });
 
+    test('writeProperty validates payload before BACnet write', async () => {
+        const server = Object.create(Server.prototype);
+        server.bacnetClient = {
+            deviceConfigs: new Map([['114', { device: { address: '192.168.1.10' } }]]),
+            writeProperty: jest.fn()
+        };
+        const res = createResponse();
+
+        await server._writeProperty({
+            body: { deviceId: '114', objectType: 'bad', objectInstance: 0, propertyId: 85, value: 1 }
+        }, res);
+
+        expect(res.statusCode).toBe(400);
+        expect(server.bacnetClient.writeProperty).not.toHaveBeenCalled();
+    });
+
+    test('writeProperty returns 500 on BACnet write failure', async () => {
+        const server = Object.create(Server.prototype);
+        server.bacnetClient = {
+            deviceConfigs: new Map([['114', { device: { address: '192.168.1.10' } }]]),
+            writeProperty: jest.fn().mockRejectedValue(new Error('write failed'))
+        };
+        const res = createResponse();
+
+        await server._writeProperty({
+            body: { deviceId: '114', objectType: 1, objectInstance: 0, propertyId: 85, value: 1 }
+        }, res);
+
+        expect(res.statusCode).toBe(500);
+        expect(res.payload.message).toContain('write failed');
+    });
+
     test('login returns token pair for valid credentials', async () => {
         const server = Object.create(Server.prototype);
         server.authService = {
@@ -235,6 +280,21 @@ describe('Server helper methods', () => {
         await server._login({ body: { username: 'admin', password: 'secret' } }, res);
 
         expect(res.payload).toMatchObject({ status: 'success', token: 'jwt', refreshToken: 'refresh' });
+    });
+
+    test('login validates required fields and invalid credentials', async () => {
+        const server = Object.create(Server.prototype);
+        server.authService = {
+            validateUser: jest.fn().mockResolvedValue(null)
+        };
+
+        const missingRes = createResponse();
+        await server._login({ body: { username: 'admin' } }, missingRes);
+        expect(missingRes.statusCode).toBe(400);
+
+        const invalidRes = createResponse();
+        await server._login({ body: { username: 'admin', password: 'bad' } }, invalidRes);
+        expect(invalidRes.statusCode).toBe(401);
     });
 
     test('refresh rotates refresh token and returns new access token', async () => {
@@ -252,6 +312,21 @@ describe('Server helper methods', () => {
         expect(res.payload).toEqual({ status: 'success', token: 'new-jwt', refreshToken: 'new-refresh' });
     });
 
+    test('refresh requires token and returns 401 on rotation failure', async () => {
+        const server = Object.create(Server.prototype);
+        server.authService = {
+            rotateRefreshToken: jest.fn().mockRejectedValue(new Error('bad token'))
+        };
+
+        const missingRes = createResponse();
+        await server._refresh({ body: {} }, missingRes);
+        expect(missingRes.statusCode).toBe(400);
+
+        const invalidRes = createResponse();
+        await server._refresh({ body: { refreshToken: 'bad' } }, invalidRes);
+        expect(invalidRes.statusCode).toBe(401);
+    });
+
     test('changePassword validates required fields', async () => {
         const server = Object.create(Server.prototype);
         server.authService = { changePassword: jest.fn() };
@@ -260,6 +335,27 @@ describe('Server helper methods', () => {
         await server._changePassword({ body: {}, user: { sub: 1 } }, res);
 
         expect(res.statusCode).toBe(400);
+    });
+
+    test('changePassword returns success and service errors', async () => {
+        const server = Object.create(Server.prototype);
+        server.authService = { changePassword: jest.fn() };
+
+        const okRes = createResponse();
+        await server._changePassword({
+            body: { oldPassword: 'old', newPassword: 'new' },
+            user: { sub: 1 }
+        }, okRes);
+        expect(okRes.payload).toEqual({ status: 'success', message: 'Password updated' });
+
+        server.authService.changePassword.mockRejectedValueOnce(new Error('Invalid old password'));
+        const errRes = createResponse();
+        await server._changePassword({
+            body: { oldPassword: 'old', newPassword: 'new' },
+            user: { sub: 1 }
+        }, errRes);
+        expect(errRes.statusCode).toBe(400);
+        expect(errRes.payload.message).toBe('Invalid old password');
     });
 
     test('requireRole returns 403 for insufficient role', async () => {
@@ -277,5 +373,82 @@ describe('Server helper methods', () => {
 
         expect(res.statusCode).toBe(403);
         expect(next).not.toHaveBeenCalled();
+    });
+
+    test('requireRole rejects missing and invalid tokens and accepts authorized token', async () => {
+        const server = Object.create(Server.prototype);
+        const next = jest.fn();
+
+        server.authService = {
+            verifyToken: jest.fn().mockRejectedValue(new Error('invalid token')),
+            hasRequiredRole: jest.fn().mockReturnValue(true)
+        };
+
+        const missingRes = createResponse();
+        await server._requireRole('viewer')({ headers: {} }, missingRes, next);
+        expect(missingRes.statusCode).toBe(401);
+
+        const invalidRes = createResponse();
+        await server._requireRole('viewer')({
+            headers: { authorization: 'Bearer broken' }
+        }, invalidRes, next);
+        expect(invalidRes.statusCode).toBe(401);
+
+        server.authService.verifyToken.mockResolvedValueOnce({ sub: 3, role: 'admin' });
+        const req = { headers: { authorization: 'Bearer ok' } };
+        const okRes = createResponse();
+        await server._requireRole('viewer')(req, okRes, next);
+        expect(req.user).toEqual({ sub: 3, role: 'admin' });
+        expect(next).toHaveBeenCalled();
+    });
+
+    test('scanDevice validates payload, saves config, and handles failure', async () => {
+        const server = Object.create(Server.prototype);
+        server.bacnetClient = {
+            scanDevice: jest.fn()
+                .mockResolvedValueOnce([{ objectId: { type: 2, instance: 202 } }])
+                .mockRejectedValueOnce(new Error('scan failed')),
+            saveConfig: jest.fn(),
+            startPolling: jest.fn()
+        };
+
+        const invalidRes = createResponse();
+        server._scanDevice({ body: {}, query: {} }, invalidRes);
+        expect(invalidRes.statusCode).toBe(400);
+
+        const saveRes = createResponse();
+        server._scanDevice({
+            body: { deviceId: 114, address: '192.168.1.10' },
+            query: { saveConfig: 'true' }
+        }, saveRes);
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(server.bacnetClient.saveConfig).toHaveBeenCalled();
+        expect(server.bacnetClient.startPolling).toHaveBeenCalled();
+        expect(saveRes.payload).toEqual([{ objectId: { type: 2, instance: 202 } }]);
+
+        const errRes = createResponse();
+        server._scanDevice({
+            body: { deviceId: 115, address: '192.168.1.11' },
+            query: {}
+        }, errRes);
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(errRes.statusCode).toBe(500);
+        expect(errRes.payload.message).toBe('Failed to scan device');
+    });
+
+    test('register validates required fields and returns created user', async () => {
+        const server = Object.create(Server.prototype);
+        server.authService = {
+            createUser: jest.fn().mockResolvedValue({ id: 4, username: 'new-user', role: 'viewer' })
+        };
+
+        const missingRes = createResponse();
+        await server._register({ body: { username: 'new-user' } }, missingRes);
+        expect(missingRes.statusCode).toBe(400);
+
+        const okRes = createResponse();
+        await server._register({ body: { username: 'new-user', password: 'secret' } }, okRes);
+        expect(okRes.statusCode).toBe(201);
+        expect(okRes.payload.user.username).toBe('new-user');
     });
 });
