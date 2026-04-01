@@ -39,7 +39,10 @@ jobs:
         run: npm ci
 
       - name: Run test suite
-        run: npm test -- --coverage
+        run: npm test -- --runInBand
+
+      - name: Remove generated coverage artifacts
+        run: rm -rf coverage
 
       - name: Analyze
         uses: github/codeql-action/analyze@v3
