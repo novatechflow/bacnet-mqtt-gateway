@@ -2,4 +2,4 @@
 set -euo pipefail
 
 npm install --ignore-scripts
-npm test -- --runInBand --testPathIgnorePatterns=.codeql-db
+npm test -- --runInBand --testPathIgnorePatterns=.codeql-db --coverage=false
