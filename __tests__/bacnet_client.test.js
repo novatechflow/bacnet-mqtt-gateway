@@ -253,6 +253,35 @@ describe('BacnetClient', () => {
         cleanup(client);
     });
 
+    test('scanDevice retries transient object list failures', async () => {
+        const objectId = { type: 2, instance: 202 };
+        mockReadProperty.mockImplementation((_addr, _objectId, _propertyId, options, cb) => {
+            cb(null, buildReadPropertyResponse(1, options.arrayIndex));
+        });
+        mockReadPropertyMultiple.mockImplementation((_addr, requestArray, _opts, cb) => {
+            const request = requestArray[0];
+            if (request.objectId.type === 8) {
+                if (mockReadPropertyMultiple.mock.calls.length === 1) {
+                    cb(new Error('temporary timeout'));
+                    return;
+                }
+                cb(null, buildObjectListResponse([objectId]));
+                return;
+            }
+            cb(null, buildFullObjectResponse(request.objectId, 'Zone Temp'));
+        });
+
+        const { BacnetClient } = require('../src/bacnet_client');
+        const client = new BacnetClient({ runtimeState, bacnetConfig });
+        await client.ready;
+
+        const objects = await client.scanDevice({ address: '10.0.0.1', deviceId: 123 });
+
+        expect(objects.map((object) => object.objectId)).toEqual([objectId]);
+        expect(mockReadPropertyMultiple).toHaveBeenCalledTimes(3);
+        cleanup(client);
+    });
+
     test('scanDevice keeps objects when optional full metadata reads fail', async () => {
         const allObjects = [
             { type: 5, instance: 136448 },
@@ -291,6 +320,36 @@ describe('BacnetClient', () => {
             expect.any(Object),
             expect.any(Function)
         );
+        cleanup(client);
+    });
+
+    test('scanDevice retries transient object metadata failures', async () => {
+        const objectId = { type: 5, instance: 136448 };
+        mockReadProperty.mockImplementation((_addr, _objectId, _propertyId, options, cb) => {
+            cb(null, buildReadPropertyResponse(1, options.arrayIndex));
+        });
+        mockReadPropertyMultiple.mockImplementation((_addr, requestArray, _opts, cb) => {
+            const request = requestArray[0];
+            if (request.objectId.type === 8) {
+                cb(null, buildObjectListResponse([objectId]));
+                return;
+            }
+            const fullReadCalls = mockReadPropertyMultiple.mock.calls.filter((call) => call[1][0].objectId.type === 5);
+            if (fullReadCalls.length === 1) {
+                cb(new Error('temporary object timeout'));
+                return;
+            }
+            cb(null, buildFullObjectResponse(request.objectId, 'Indoor On Off'));
+        });
+
+        const { BacnetClient } = require('../src/bacnet_client');
+        const client = new BacnetClient({ runtimeState, bacnetConfig });
+        await client.ready;
+
+        const objects = await client.scanDevice({ address: '10.0.0.1', deviceId: 123 });
+
+        expect(objects).toHaveLength(1);
+        expect(objects[0]).toMatchObject({ objectId, name: 'Indoor On Off' });
         cleanup(client);
     });
 

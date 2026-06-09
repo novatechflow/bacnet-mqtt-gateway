@@ -26,6 +26,7 @@ class BacnetClient extends EventEmitter {
         this.failureThreshold = parseInt(pollingConfig.failureThreshold || 3, 10);
         this.baseBackoffMs = parseInt(pollingConfig.baseBackoffMs || 5000, 10);
         this.maxBackoffMs = parseInt(pollingConfig.maxBackoffMs || 120000, 10);
+        this.discoveryRetries = this._loadIntegerOption('bacnet.discoveryRetries', 2);
 
         this.metrics = {
             totalPolls: 0,
@@ -88,6 +89,14 @@ class BacnetClient extends EventEmitter {
             options.priority = priority;
         }
         return options;
+    }
+
+    _loadIntegerOption(path, fallback) {
+        if (!config.has(path)) {
+            return fallback;
+        }
+        const value = parseInt(config.get(path), 10);
+        return Number.isNaN(value) ? fallback : value;
     }
 
     async _registerDeviceConfig(deviceConfig) {
@@ -393,6 +402,25 @@ class BacnetClient extends EventEmitter {
         this.client.readPropertyMultiple(deviceAddress, requestArray, this._buildRequestOptions(), callback);
     }
 
+    _readObjectListOnce(deviceAddress, deviceId) {
+        return new Promise((resolve, reject) => {
+            this._readObjectList(deviceAddress, deviceId, (error, value) => {
+                if (error) {
+                    reject(error);
+                } else {
+                    resolve(value);
+                }
+            });
+        });
+    }
+
+    async _readObjectListWithRetry(deviceAddress, deviceId) {
+        return this._retryDiscoveryRead(
+            () => this._readObjectListOnce(deviceAddress, deviceId),
+            `Object_List for ${deviceId}`
+        );
+    }
+
     _readObjectListArrayIndex(deviceAddress, deviceId, arrayIndex) {
         return new Promise((resolve, reject) => {
             const objectId = { type: bacnet.enum.ObjectTypes.OBJECT_DEVICE, instance: deviceId };
@@ -408,15 +436,22 @@ class BacnetClient extends EventEmitter {
         });
     }
 
+    async _readObjectListArrayIndexWithRetry(deviceAddress, deviceId, arrayIndex) {
+        return this._retryDiscoveryRead(
+            () => this._readObjectListArrayIndex(deviceAddress, deviceId, arrayIndex),
+            `Object_List[${arrayIndex}] for ${deviceId}`
+        );
+    }
+
     async _readObjectListCount(deviceAddress, deviceId) {
-        const value = await this._readObjectListArrayIndex(deviceAddress, deviceId, 0);
+        const value = await this._readObjectListArrayIndexWithRetry(deviceAddress, deviceId, 0);
         return this._extractObjectListCount(value);
     }
 
     async _readObjectListByIndex(deviceAddress, deviceId, count) {
         const indexes = Array.from({ length: count }, (_item, idx) => idx + 1);
         const reads = await this._runWithConcurrency(indexes, this.objectConcurrency, async (arrayIndex) => {
-            const value = await this._readObjectListArrayIndex(deviceAddress, deviceId, arrayIndex);
+            const value = await this._readObjectListArrayIndexWithRetry(deviceAddress, deviceId, arrayIndex);
             return this._extractIndexedObjectListEntry(value);
         });
         const objects = reads.map((entry) => entry && entry.result ? entry.result : entry);
@@ -425,6 +460,21 @@ class BacnetClient extends EventEmitter {
             throw failed.error || new Error('Failed to read complete BACnet object list by index');
         }
         return this._dedupeObjectIds(objects);
+    }
+
+    async _retryDiscoveryRead(readFn, label) {
+        let lastError = null;
+        for (let attempt = 0; attempt <= this.discoveryRetries; attempt += 1) {
+            try {
+                return await readFn();
+            } catch (error) {
+                lastError = error;
+                if (attempt < this.discoveryRetries) {
+                    logger.log('warn', `[Discovery] ${label} failed on attempt ${attempt + 1}/${this.discoveryRetries + 1}: ${error.message || error}`);
+                }
+            }
+        }
+        throw lastError;
     }
 
     _readObject(deviceAddress, type, instance, properties) {
@@ -453,6 +503,21 @@ class BacnetClient extends EventEmitter {
         ]);
     }
 
+    async _readObjectWithRetry(deviceAddress, type, instance, properties, label) {
+        let lastResult = null;
+        for (let attempt = 0; attempt <= this.discoveryRetries; attempt += 1) {
+            const result = await this._readObject(deviceAddress, type, instance, properties);
+            if (!result.error) {
+                return result;
+            }
+            lastResult = result;
+            if (attempt < this.discoveryRetries) {
+                logger.log('warn', `[Discovery] ${label} failed on attempt ${attempt + 1}/${this.discoveryRetries + 1}: ${result.error.message || result.error}`);
+            }
+        }
+        return lastResult;
+    }
+
     _readObjectBasic(deviceAddress, type, instance) {
         return this._readObject(deviceAddress, type, instance, [
             { id: bacnet.enum.PropertyIds.PROP_OBJECT_IDENTIFIER },
@@ -463,13 +528,37 @@ class BacnetClient extends EventEmitter {
     }
 
     async _readObjectDiscoveryDetails(deviceAddress, objectId) {
-        const full = await this._readObjectFull(deviceAddress, objectId.type, objectId.instance);
+        const full = await this._readObjectWithRetry(
+            deviceAddress,
+            objectId.type,
+            objectId.instance,
+            [
+                { id: bacnet.enum.PropertyIds.PROP_OBJECT_IDENTIFIER },
+                { id: bacnet.enum.PropertyIds.PROP_OBJECT_NAME },
+                { id: bacnet.enum.PropertyIds.PROP_OBJECT_TYPE },
+                { id: bacnet.enum.PropertyIds.PROP_DESCRIPTION },
+                { id: bacnet.enum.PropertyIds.PROP_UNITS },
+                { id: bacnet.enum.PropertyIds.PROP_PRESENT_VALUE }
+            ],
+            `full metadata ${objectId.type}/${objectId.instance}`
+        );
         if (!full.error) {
             return full;
         }
 
         logger.log('warn', `[Discovery] Full object read failed for ${objectId.type}/${objectId.instance}: ${full.error.message || full.error}`);
-        const basic = await this._readObjectBasic(deviceAddress, objectId.type, objectId.instance);
+        const basic = await this._readObjectWithRetry(
+            deviceAddress,
+            objectId.type,
+            objectId.instance,
+            [
+                { id: bacnet.enum.PropertyIds.PROP_OBJECT_IDENTIFIER },
+                { id: bacnet.enum.PropertyIds.PROP_OBJECT_NAME },
+                { id: bacnet.enum.PropertyIds.PROP_OBJECT_TYPE },
+                { id: bacnet.enum.PropertyIds.PROP_PRESENT_VALUE }
+            ],
+            `basic metadata ${objectId.type}/${objectId.instance}`
+        );
         if (!basic.error) {
             return basic;
         }
@@ -596,41 +685,34 @@ class BacnetClient extends EventEmitter {
     }
 
     scanDevice(device) {
-        return new Promise((resolve, reject) => {
-            this._readObjectList(device.address, device.deviceId, (err, result) => {
-                if (err) {
-                    logger.log('error', `Error whilte fetching objects: ${err}`);
-                    reject(err);
-                    return;
-                }
-                Promise.resolve()
-                    .then(async () => {
-                        let objectArray = this._extractObjectListEntries(result);
-                        let expectedCount = null;
-                        try {
-                            expectedCount = await this._readObjectListCount(device.address, device.deviceId);
-                        } catch (countError) {
-                            logger.log('warn', `[Discovery] Failed to read Object_List count for ${device.deviceId}: ${countError.message || countError}`);
-                        }
-                        if (expectedCount !== null && objectArray.length !== expectedCount) {
-                            logger.log('warn', `[Discovery] Full Object_List returned ${objectArray.length}/${expectedCount} objects for ${device.deviceId}; retrying with indexed reads.`);
-                            objectArray = await this._readObjectListByIndex(device.address, device.deviceId, expectedCount);
-                        }
-                        return Promise.all(objectArray.map((object) => {
-                            return this._readObjectDiscoveryDetails(device.address, object);
-                        }));
-                    })
-                    .then((resolved) => {
-                        const successfulResults = resolved.filter((element) => !element.error);
-                        const deviceObjects = successfulResults.map((element) => this._mapToDeviceObject(element.value));
-                        this.emit('deviceObjects', device, deviceObjects);
-                        resolve(deviceObjects);
-                    }).catch((error) => {
-                        logger.log('error', `Error whilte fetching objects: ${error}`);
-                        reject(error);
-                    });
-            });
-        });
+        return this._scanDevice(device);
+    }
+
+    async _scanDevice(device) {
+        try {
+            const result = await this._readObjectListWithRetry(device.address, device.deviceId);
+            let objectArray = this._extractObjectListEntries(result);
+            let expectedCount = null;
+            try {
+                expectedCount = await this._readObjectListCount(device.address, device.deviceId);
+            } catch (countError) {
+                logger.log('warn', `[Discovery] Failed to read Object_List count for ${device.deviceId}: ${countError.message || countError}`);
+            }
+            if (expectedCount !== null && objectArray.length !== expectedCount) {
+                logger.log('warn', `[Discovery] Full Object_List returned ${objectArray.length}/${expectedCount} objects for ${device.deviceId}; retrying with indexed reads.`);
+                objectArray = await this._readObjectListByIndex(device.address, device.deviceId, expectedCount);
+            }
+            const resolved = await Promise.all(objectArray.map((object) => {
+                return this._readObjectDiscoveryDetails(device.address, object);
+            }));
+            const successfulResults = resolved.filter((element) => !element.error);
+            const deviceObjects = successfulResults.map((element) => this._mapToDeviceObject(element.value));
+            this.emit('deviceObjects', device, deviceObjects);
+            return deviceObjects;
+        } catch (error) {
+            logger.log('error', `Error whilte fetching objects: ${error}`);
+            throw error;
+        }
     }
 
     startPolling(device, objects, pollingOrSchedule) {
