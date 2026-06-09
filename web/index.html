@@ -82,6 +82,7 @@
                     <button class="btn nav-btn" :class="{ active: state === 'objects' }" @click="showView('objects')">Object Scan</button>
                     <button class="btn nav-btn" :class="{ active: state === 'configured' }" @click="showView('configured')">Configured</button>
                     <button class="btn nav-btn" :class="{ active: state === 'runtime' }" @click="showView('runtime')">Runtime</button>
+                    <button class="btn nav-btn" :class="{ active: state === 'runtimeObjects' }" @click="showView('runtimeObjects')">Runtime Objects</button>
                 </nav>
             </div>
         </header>
@@ -91,6 +92,7 @@
             <device-scan v-if="state === 'objects'" :can-write="canWrite"></device-scan>
             <configured-devices v-if="state === 'configured'"></configured-devices>
             <runtime-devices v-if="state === 'runtime'"></runtime-devices>
+            <runtime-objects v-if="state === 'runtimeObjects'"></runtime-objects>
         </main>
 
         <div v-if="changePasswordModal" class="modal-backdrop">
@@ -301,6 +303,58 @@
             </tbody>
         </table>
         <div v-else-if="!loading" class="empty-state">No runtime state available.</div>
+    </section>
+</script>
+
+<script type="text/x-template" id="runtime-objects-template">
+    <section class="panel">
+        <div class="panel-header">
+            <div>
+                <div class="eyebrow">Runtime</div>
+                <h2 class="panel-title">Object Runtime State</h2>
+            </div>
+            <button class="btn btn-primary" @click="load" :disabled="loading || !deviceId">Refresh</button>
+        </div>
+        <p class="panel-copy">Live persisted object values from SQLite for one configured BACnet device.</p>
+
+        <form class="form-grid" @submit.prevent="load">
+            <div class="form-group">
+                <label for="runtimeObjectDeviceId">Device ID</label>
+                <input id="runtimeObjectDeviceId" v-model="deviceId" class="form-control">
+            </div>
+            <div class="form-group action-group">
+                <button class="btn btn-primary" :disabled="loading || !deviceId">Load Objects</button>
+            </div>
+        </form>
+
+        <div v-if="loading">
+            <spinner></spinner>
+        </div>
+        <div v-if="error" class="alert alert-danger">{{ error }}</div>
+        <table class="table table-dark mt-3 runtime-object-table" v-if="!loading && objects.length">
+            <thead>
+            <tr>
+                <th>Object Key</th>
+                <th>Name</th>
+                <th>Current Value</th>
+                <th>Freshness</th>
+                <th>Source</th>
+                <th>Last Update</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr v-for="object in objects" :key="object.device_id + '-' + object.object_key">
+                <td>{{ object.object_key }}</td>
+                <td>{{ object.object_name || '-' }}</td>
+                <td>{{ formatValue(object.value) }}</td>
+                <td>{{ formatDuration(object.freshness_ms) }}</td>
+                <td>{{ object.source_status || '-' }}</td>
+                <td>{{ formatTimestamp(object.updated_at || object.acquired_at) }}</td>
+            </tr>
+            </tbody>
+        </table>
+        <div v-else-if="!loading && loaded" class="empty-state">No runtime object state available for this device.</div>
+        <div v-else-if="!loading" class="empty-state">Enter a device ID to load object state.</div>
     </section>
 </script>
 

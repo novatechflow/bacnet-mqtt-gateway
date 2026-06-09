@@ -90,7 +90,8 @@ describe('BacnetClient', () => {
             upsertDeviceState: jest.fn().mockResolvedValue(undefined),
             saveObjectTelemetry: jest.fn().mockResolvedValue(undefined),
             recordPollHistory: jest.fn().mockResolvedValue(undefined),
-            listDeviceStates: jest.fn().mockResolvedValue([])
+            listDeviceStates: jest.fn().mockResolvedValue([]),
+            listObjectStates: jest.fn().mockResolvedValue([])
         };
         bacnetConfig = new MockBacnetConfig();
         jest.resetModules();
@@ -451,6 +452,8 @@ describe('BacnetClient', () => {
         await expect(client.writeProperty('a', { type: 1, instance: 1 }, 85, 1)).rejects.toThrow('write error');
         expect(logger.log).toHaveBeenCalledWith('error', expect.stringContaining('[BACnet Write] Error writing property: Error: write error'));
         await expect(client.listRuntimeStates()).resolves.toEqual([]);
+        await expect(client.listRuntimeObjectStates(114)).resolves.toEqual([]);
+        expect(runtimeState.listObjectStates).toHaveBeenCalledWith('114');
         expect(client.getStatus()).toEqual(expect.objectContaining({
             configuredDevices: client.deviceConfigs.size,
             avgPollDurationMs: expect.any(Number)

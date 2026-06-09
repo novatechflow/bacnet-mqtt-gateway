@@ -555,6 +555,10 @@ class BacnetClient extends EventEmitter {
         return this.runtimeState.listDeviceStates();
     }
 
+    async listRuntimeObjectStates(deviceId) {
+        return this.runtimeState.listObjectStates(deviceId.toString());
+    }
+
     getStatus() {
         const avgPollDurationMs = this.metrics.totalPolls > 0
             ? this.metrics.totalPollDurationMs / this.metrics.totalPolls

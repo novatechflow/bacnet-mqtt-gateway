@@ -82,7 +82,8 @@ describe('web admin app', () => {
             WhoisPanel: expect.any(Object),
             DeviceScan: expect.any(Object),
             ConfiguredDevices: expect.any(Object),
-            RuntimeDevices: expect.any(Object)
+            RuntimeDevices: expect.any(Object),
+            RuntimeObjects: expect.any(Object)
         }));
     });
 
@@ -118,6 +119,28 @@ describe('web admin app', () => {
 
         expect(html).toContain('https://unpkg.com/vue@3/dist/vue.global.prod.js');
         expect(html).toContain("showView('runtime')");
+        expect(html).toContain("showView('runtimeObjects')");
         expect(html).toContain('id="runtime-devices-template"');
+        expect(html).toContain('id="runtime-objects-template"');
+    });
+
+    test('runtime objects view loads persisted object states through the new API', async () => {
+        const { context, exports } = loadAdminScript();
+        const RuntimeObjects = exports.appOptions.components.RuntimeObjects;
+        const component = {
+            ...RuntimeObjects.data(),
+            ...RuntimeObjects.methods
+        };
+        component.deviceId = 'Gree VRF/1';
+        context.axios.get.mockResolvedValue({
+            data: [{ device_id: 'Gree VRF/1', object_key: '2_202', value: 21.5 }]
+        });
+
+        await component.load();
+
+        expect(context.axios.get).toHaveBeenCalledWith('/api/bacnet/runtime-objects/Gree%20VRF%2F1');
+        expect(component.objects).toEqual([{ device_id: 'Gree VRF/1', object_key: '2_202', value: 21.5 }]);
+        expect(component.loaded).toBe(true);
+        expect(component.loading).toBe(false);
     });
 });

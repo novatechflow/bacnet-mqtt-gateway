@@ -12,7 +12,15 @@ servers:
         default: '8082' 
         description: Server port
 
+security:
+  - bearerAuth: []
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
     DeviceScanRequest:
       type: object
@@ -86,6 +94,50 @@ components:
         description:
           type: string
           nullable: true
+    RuntimeObjectState:
+      type: object
+      properties:
+        device_id:
+          type: string
+          example: "114"
+        object_key:
+          type: string
+          example: "2_202"
+        object_name:
+          type: string
+          nullable: true
+          example: Indoor Temperature
+        value:
+          nullable: true
+          description: Decoded current object value from the runtime database.
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: object
+            - type: array
+              items: {}
+        acquired_at:
+          type: integer
+          nullable: true
+          description: Unix epoch milliseconds when the BACnet value was acquired.
+        published_at:
+          type: integer
+          nullable: true
+          description: Unix epoch milliseconds when the value was published to MQTT.
+        freshness_ms:
+          type: integer
+          nullable: true
+        source_status:
+          type: string
+          nullable: true
+          example: fresh
+        poll_duration_ms:
+          type: integer
+          nullable: true
+        updated_at:
+          type: integer
+          description: Unix epoch milliseconds when the runtime row was last updated.
     WritePropertyRequest:
       type: object
       required:
@@ -263,6 +315,33 @@ paths:
                 type: array
                 items:
                   type: object
+
+  /api/bacnet/runtime-objects/{deviceId}:
+    get:
+      summary: List runtime BACnet object state for a device
+      description: Returns persisted object runtime values from SQLite for a configured BACnet device.
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          description: The configured BACnet device ID.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Runtime object state entries for the device.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RuntimeObjectState'
+        '500':
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/bacnet/write:
     put:

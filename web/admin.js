@@ -342,13 +342,69 @@ const RuntimeDevices = {
     }
 };
 
+const RuntimeObjects = {
+    template: '#runtime-objects-template',
+    components: { Spinner },
+    data() {
+        return {
+            loading: false,
+            loaded: false,
+            deviceId: '',
+            objects: [],
+            error: null
+        };
+    },
+    methods: {
+        formatTimestamp(value) {
+            if (!value) {
+                return '-';
+            }
+            return new Date(value).toLocaleString();
+        },
+        formatDuration(value) {
+            if (!value) {
+                return '-';
+            }
+            return `${value} ms`;
+        },
+        formatValue(value) {
+            if (value === null || value === undefined) {
+                return '-';
+            }
+            if (typeof value === 'object') {
+                return JSON.stringify(value);
+            }
+            return String(value);
+        },
+        async load() {
+            if (!this.deviceId) {
+                return;
+            }
+            this.loading = true;
+            this.loaded = false;
+            this.error = null;
+            try {
+                const response = await axios.get(`/api/bacnet/runtime-objects/${encodeURIComponent(this.deviceId)}`);
+                this.objects = response.data || [];
+            } catch (error) {
+                this.objects = [];
+                this.error = extractErrorMessage(error, 'Failed to load runtime object state');
+            } finally {
+                this.loaded = true;
+                this.loading = false;
+            }
+        }
+    }
+};
+
 createApp({
     components: {
         Spinner,
         WhoisPanel,
         DeviceScan,
         ConfiguredDevices,
-        RuntimeDevices
+        RuntimeDevices,
+        RuntimeObjects
     },
     data() {
         return {

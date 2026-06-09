@@ -53,6 +53,7 @@ class Server {
         this.app.put('/api/bacnet/:deviceId/objects', apiLimiter, this._requireRole('viewer'), this._scanDevice.bind(this));
         this.app.get('/api/bacnet/configured', apiLimiter, this._requireRole('viewer'), this._listConfigured.bind(this));
         this.app.get('/api/bacnet/runtime', apiLimiter, this._requireRole('viewer'), this._listRuntime.bind(this));
+        this.app.get('/api/bacnet/runtime-objects/:deviceId', apiLimiter, this._requireRole('viewer'), this._listRuntimeObjects.bind(this));
         this.app.put('/api/bacnet/:deviceId/config', apiLimiter, this._requireRole('admin'), this._configurePolling.bind(this));
         this.app.put('/api/bacnet/write', apiLimiter, this._requireRole('admin'), this._writeProperty.bind(this)); 
 
@@ -194,6 +195,20 @@ class Server {
         } catch (err) {
             logger.log('error', `[API] Failed to fetch runtime states: ${err}`);
             res.status(500).send({ status: 'error', message: 'Failed to fetch runtime states' });
+        }
+    }
+
+    async _listRuntimeObjects(req, res) {
+        const { deviceId } = req.params || {};
+        if (deviceId === undefined || deviceId === '') {
+            return res.status(400).send({ status: 'error', message: 'deviceId is required' });
+        }
+        try {
+            const states = await this.bacnetClient.listRuntimeObjectStates(deviceId);
+            res.send(states);
+        } catch (err) {
+            logger.log('error', `[API] Failed to fetch runtime object states for ${deviceId}: ${err}`);
+            res.status(500).send({ status: 'error', message: 'Failed to fetch runtime object states' });
         }
     }
 

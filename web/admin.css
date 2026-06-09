@@ -196,6 +196,11 @@ body {
     border-color: rgba(148, 163, 184, 0.1);
 }
 
+.runtime-object-table td {
+    max-width: 260px;
+    overflow-wrap: anywhere;
+}
+
 .modal-backdrop {
     position: fixed;
     inset: 0;

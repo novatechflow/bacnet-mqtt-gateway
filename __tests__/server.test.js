@@ -81,6 +81,7 @@ describe('Server helper methods', () => {
         expect(expressApp.post).toHaveBeenCalledWith('/auth/login', expect.any(Function), expect.any(Function));
         expect(expressApp.get).toHaveBeenCalledWith('/health', expect.any(Function));
         expect(expressApp.get).toHaveBeenCalledWith('/metrics', expect.any(Function));
+        expect(expressApp.get).toHaveBeenCalledWith('/api/bacnet/runtime-objects/:deviceId', expect.any(Function), expect.any(Function), expect.any(Function));
         expect(expressApp.put).toHaveBeenCalledWith('/api/bacnet/write', expect.any(Function), expect.any(Function), expect.any(Function));
         expect(expressApp.listen).toHaveBeenCalledWith(8082, expect.any(Function));
         expressApp.listen.mock.calls[0][1]();
@@ -246,6 +247,46 @@ describe('Server helper methods', () => {
 
         expect(res.statusCode).toBe(500);
         expect(res.payload.message).toBe('Failed to fetch runtime states');
+    });
+
+    test('listRuntimeObjects returns persisted object states for a device', async () => {
+        const server = Object.create(Server.prototype);
+        server.bacnetClient = {
+            listRuntimeObjectStates: jest.fn().mockResolvedValue([{ device_id: '114', object_key: '2_202', value: 21.5 }])
+        };
+        const res = createResponse();
+
+        await server._listRuntimeObjects({ params: { deviceId: '114' } }, res);
+
+        expect(server.bacnetClient.listRuntimeObjectStates).toHaveBeenCalledWith('114');
+        expect(res.payload).toEqual([{ device_id: '114', object_key: '2_202', value: 21.5 }]);
+    });
+
+    test('listRuntimeObjects rejects missing device id without querying runtime state', async () => {
+        const server = Object.create(Server.prototype);
+        server.bacnetClient = {
+            listRuntimeObjectStates: jest.fn()
+        };
+        const res = createResponse();
+
+        await server._listRuntimeObjects({ params: { deviceId: '' } }, res);
+
+        expect(res.statusCode).toBe(400);
+        expect(res.payload.message).toBe('deviceId is required');
+        expect(server.bacnetClient.listRuntimeObjectStates).not.toHaveBeenCalled();
+    });
+
+    test('listRuntimeObjects returns 500 on object state failure', async () => {
+        const server = Object.create(Server.prototype);
+        server.bacnetClient = {
+            listRuntimeObjectStates: jest.fn().mockRejectedValue(new Error('db down'))
+        };
+        const res = createResponse();
+
+        await server._listRuntimeObjects({ params: { deviceId: '114' } }, res);
+
+        expect(res.statusCode).toBe(500);
+        expect(res.payload.message).toBe('Failed to fetch runtime object states');
     });
 
     test('configure polling rejects invalid payload', () => {
