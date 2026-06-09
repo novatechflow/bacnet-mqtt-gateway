@@ -1,6 +1,7 @@
 process.env.NODE_CONFIG_STRICT_MODE = '0';
 
 const mockReadPropertyMultiple = jest.fn();
+const mockReadProperty = jest.fn();
 const mockWriteProperty = jest.fn();
 const mockWhoIs = jest.fn();
 const mockScheduleJob = jest.fn();
@@ -10,6 +11,7 @@ jest.mock('bacstack', () => {
         const { EventEmitter } = require('events');
         const emitter = new EventEmitter();
         emitter.readPropertyMultiple = mockReadPropertyMultiple;
+        emitter.readProperty = mockReadProperty;
         emitter.writeProperty = mockWriteProperty;
         emitter.whoIs = mockWhoIs;
         return emitter;
@@ -116,6 +118,39 @@ describe('BacnetClient', () => {
         };
     }
 
+    function buildObjectListResponse(objects) {
+        return {
+            values: [{
+                values: [{
+                    value: objects.map((objectId) => ({ value: objectId }))
+                }]
+            }]
+        };
+    }
+
+    function buildReadPropertyResponse(value, arrayIndex) {
+        return {
+            property: { id: 76, index: arrayIndex },
+            values: [{ value }]
+        };
+    }
+
+    function buildFullObjectResponse(objectId, name) {
+        return {
+            values: [{
+                objectId,
+                values: [
+                    { id: 75, value: [{ value: objectId }] },
+                    { id: 77, value: [{ value: name }] },
+                    { id: 79, value: [{ value: objectId.type }] },
+                    { id: 28, value: [{ value: `${name} description` }] },
+                    { id: 117, value: [{ value: 'unit' }] },
+                    { id: 85, value: [{ value: 1 }] }
+                ]
+            }]
+        };
+    }
+
     function cleanup(client) {
         clearInterval(client.schedulerHandle);
     }
@@ -146,33 +181,16 @@ describe('BacnetClient', () => {
     });
 
     test('scanDevice returns mapped device objects on success', async () => {
+        mockReadProperty.mockImplementation((_addr, _objectId, _propertyId, options, cb) => {
+            cb(null, buildReadPropertyResponse(1, options.arrayIndex));
+        });
         mockReadPropertyMultiple.mockImplementation((_addr, requestArray, _opts, cb) => {
             const request = requestArray[0];
             if (request.objectId.type === 8) {
-                cb(null, {
-                    values: [{
-                        values: [{
-                            value: [
-                                { value: { type: 2, instance: 202 } }
-                            ]
-                        }]
-                    }]
-                });
+                cb(null, buildObjectListResponse([{ type: 2, instance: 202 }]));
                 return;
             }
-            cb(null, {
-                values: [{
-                    objectId: request.objectId,
-                    values: [
-                        { id: 75, value: [{ value: request.objectId }] },
-                        { id: 77, value: [{ value: 'Zone Temp' }] },
-                        { id: 79, value: [{ value: request.objectId.type }] },
-                        { id: 28, value: [{ value: 'Room temperature' }] },
-                        { id: 117, value: [{ value: 'degC' }] },
-                        { id: 85, value: [{ value: 22.3 }] }
-                    ]
-                }]
-            });
+            cb(null, buildFullObjectResponse(request.objectId, 'Zone Temp'));
         });
 
         const { BacnetClient } = require('../src/bacnet_client');
@@ -183,6 +201,55 @@ describe('BacnetClient', () => {
 
         expect(objects).toHaveLength(1);
         expect(objects[0].name).toBe('Zone Temp');
+        cleanup(client);
+    });
+
+    test('scanDevice falls back to indexed object list reads when the full list is an incomplete subset', async () => {
+        const allObjects = [
+            { type: 3, instance: 136195 },
+            { type: 19, instance: 136192 },
+            { type: 19, instance: 136193 },
+            { type: 19, instance: 136448 },
+            { type: 19, instance: 136449 }
+        ];
+        mockReadProperty.mockImplementation((_addr, _objectId, propertyId, options, cb) => {
+            expect(propertyId).toBe(76);
+            if (options.arrayIndex === 0) {
+                cb(null, buildReadPropertyResponse(allObjects.length, 0));
+                return;
+            }
+            cb(null, buildReadPropertyResponse(allObjects[options.arrayIndex - 1], options.arrayIndex));
+        });
+        mockReadPropertyMultiple.mockImplementation((_addr, requestArray, _opts, cb) => {
+            const request = requestArray[0];
+            if (request.objectId.type === 8) {
+                cb(null, buildObjectListResponse([allObjects[0], allObjects[3]]));
+                return;
+            }
+            cb(null, buildFullObjectResponse(request.objectId, `Object ${request.objectId.instance}`));
+        });
+
+        const { BacnetClient } = require('../src/bacnet_client');
+        const client = new BacnetClient({ runtimeState, bacnetConfig });
+        await client.ready;
+
+        const objects = await client.scanDevice({ address: '10.0.0.1', deviceId: 123 });
+
+        expect(objects.map((object) => object.objectId)).toEqual(allObjects);
+        expect(mockReadProperty).toHaveBeenCalledWith(
+            '10.0.0.1',
+            { type: 8, instance: 123 },
+            76,
+            expect.objectContaining({ arrayIndex: 0 }),
+            expect.any(Function)
+        );
+        expect(mockReadProperty).toHaveBeenCalledWith(
+            '10.0.0.1',
+            { type: 8, instance: 123 },
+            76,
+            expect.objectContaining({ arrayIndex: 5 }),
+            expect.any(Function)
+        );
         cleanup(client);
     });
 
@@ -417,6 +484,7 @@ describe('BacnetClient', () => {
         jest.spyOn(client, '_readObjectList').mockImplementation((_addr, _id, cb) => cb(null, {
             values: [{ values: [{ value: [{ value: { type: 2, instance: 1 } }] }] }]
         }));
+        jest.spyOn(client, '_readObjectListCount').mockResolvedValue(1);
         jest.spyOn(client, '_readObjectFull').mockRejectedValue(new Error('catastrophic read'));
 
         await expect(client.scanDevice({ address: '10.0.0.5', deviceId: 5 })).rejects.toThrow('catastrophic read');

@@ -393,6 +393,40 @@ class BacnetClient extends EventEmitter {
         this.client.readPropertyMultiple(deviceAddress, requestArray, this._buildRequestOptions(), callback);
     }
 
+    _readObjectListArrayIndex(deviceAddress, deviceId, arrayIndex) {
+        return new Promise((resolve, reject) => {
+            const objectId = { type: bacnet.enum.ObjectTypes.OBJECT_DEVICE, instance: deviceId };
+            const options = this._buildRequestOptions();
+            options.arrayIndex = arrayIndex;
+            this.client.readProperty(deviceAddress, objectId, bacnet.enum.PropertyIds.PROP_OBJECT_LIST, options, (error, value) => {
+                if (error) {
+                    reject(error);
+                } else {
+                    resolve(value);
+                }
+            });
+        });
+    }
+
+    async _readObjectListCount(deviceAddress, deviceId) {
+        const value = await this._readObjectListArrayIndex(deviceAddress, deviceId, 0);
+        return this._extractObjectListCount(value);
+    }
+
+    async _readObjectListByIndex(deviceAddress, deviceId, count) {
+        const indexes = Array.from({ length: count }, (_item, idx) => idx + 1);
+        const reads = await this._runWithConcurrency(indexes, this.objectConcurrency, async (arrayIndex) => {
+            const value = await this._readObjectListArrayIndex(deviceAddress, deviceId, arrayIndex);
+            return this._extractIndexedObjectListEntry(value);
+        });
+        const objects = reads.map((entry) => entry && entry.result ? entry.result : entry);
+        if (objects.some((object) => !object || object.error)) {
+            const failed = objects.find((object) => object && object.error);
+            throw failed.error || new Error('Failed to read complete BACnet object list by index');
+        }
+        return this._dedupeObjectIds(objects);
+    }
+
     _readObject(deviceAddress, type, instance, properties) {
         return new Promise((resolve) => {
             const requestArray = [{
@@ -436,6 +470,69 @@ class BacnetClient extends EventEmitter {
         return null;
     }
 
+    _extractObjectListEntries(result) {
+        if (!result || !result.values || !result.values[0] || !result.values[0].values || !result.values[0].values[0]) {
+            return [];
+        }
+        const values = result.values[0].values[0].value;
+        if (!Array.isArray(values)) {
+            return [];
+        }
+        return this._dedupeObjectIds(values
+            .map((entry) => this._normalizeObjectIdentifierValue(entry))
+            .filter(Boolean));
+    }
+
+    _extractObjectListCount(result) {
+        if (!result || !Array.isArray(result.values) || !result.values[0]) {
+            return null;
+        }
+        const count = parseInt(result.values[0].value, 10);
+        return Number.isFinite(count) && count >= 0 ? count : null;
+    }
+
+    _extractIndexedObjectListEntry(result) {
+        if (!result || !Array.isArray(result.values) || !result.values[0]) {
+            return null;
+        }
+        return this._normalizeObjectIdentifierValue(result.values[0]);
+    }
+
+    _normalizeObjectIdentifierValue(entry) {
+        if (!entry) {
+            return null;
+        }
+        const value = entry.value !== undefined ? entry.value : entry;
+        if (value && value.type !== undefined && value.instance !== undefined) {
+            return {
+                type: parseInt(value.type, 10),
+                instance: parseInt(value.instance, 10)
+            };
+        }
+        if (value && value.objectId && value.objectId.type !== undefined && value.objectId.instance !== undefined) {
+            return {
+                type: parseInt(value.objectId.type, 10),
+                instance: parseInt(value.objectId.instance, 10)
+            };
+        }
+        return null;
+    }
+
+    _dedupeObjectIds(objects) {
+        const seen = new Set();
+        return objects.filter((object) => {
+            if (!object || Number.isNaN(object.type) || Number.isNaN(object.instance)) {
+                return false;
+            }
+            const key = `${object.type}_${object.instance}`;
+            if (seen.has(key)) {
+                return false;
+            }
+            seen.add(key);
+            return true;
+        });
+    }
+
     _mapToDeviceObject(object) {
         if (!object || !object.values) {
             return null;
@@ -466,22 +563,32 @@ class BacnetClient extends EventEmitter {
                     reject(err);
                     return;
                 }
-                const objectArray = result.values[0].values[0].value;
-                const promises = [];
-
-                objectArray.forEach((object) => {
-                    promises.push(this._readObjectFull(device.address, object.value.type, object.value.instance));
-                });
-
-                Promise.all(promises).then((resolved) => {
-                    const successfulResults = resolved.filter((element) => !element.error);
-                    const deviceObjects = successfulResults.map((element) => this._mapToDeviceObject(element.value));
-                    this.emit('deviceObjects', device, deviceObjects);
-                    resolve(deviceObjects);
-                }).catch((error) => {
-                    logger.log('error', `Error whilte fetching objects: ${error}`);
-                    reject(error);
-                });
+                Promise.resolve()
+                    .then(async () => {
+                        let objectArray = this._extractObjectListEntries(result);
+                        let expectedCount = null;
+                        try {
+                            expectedCount = await this._readObjectListCount(device.address, device.deviceId);
+                        } catch (countError) {
+                            logger.log('warn', `[Discovery] Failed to read Object_List count for ${device.deviceId}: ${countError.message || countError}`);
+                        }
+                        if (expectedCount !== null && objectArray.length !== expectedCount) {
+                            logger.log('warn', `[Discovery] Full Object_List returned ${objectArray.length}/${expectedCount} objects for ${device.deviceId}; retrying with indexed reads.`);
+                            objectArray = await this._readObjectListByIndex(device.address, device.deviceId, expectedCount);
+                        }
+                        return Promise.all(objectArray.map((object) => {
+                            return this._readObjectFull(device.address, object.type, object.instance);
+                        }));
+                    })
+                    .then((resolved) => {
+                        const successfulResults = resolved.filter((element) => !element.error);
+                        const deviceObjects = successfulResults.map((element) => this._mapToDeviceObject(element.value));
+                        this.emit('deviceObjects', device, deviceObjects);
+                        resolve(deviceObjects);
+                    }).catch((error) => {
+                        logger.log('error', `Error whilte fetching objects: ${error}`);
+                        reject(error);
+                    });
             });
         });
     }
