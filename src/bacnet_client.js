@@ -453,6 +453,34 @@ class BacnetClient extends EventEmitter {
         ]);
     }
 
+    _readObjectBasic(deviceAddress, type, instance) {
+        return this._readObject(deviceAddress, type, instance, [
+            { id: bacnet.enum.PropertyIds.PROP_OBJECT_IDENTIFIER },
+            { id: bacnet.enum.PropertyIds.PROP_OBJECT_NAME },
+            { id: bacnet.enum.PropertyIds.PROP_OBJECT_TYPE },
+            { id: bacnet.enum.PropertyIds.PROP_PRESENT_VALUE }
+        ]);
+    }
+
+    async _readObjectDiscoveryDetails(deviceAddress, objectId) {
+        const full = await this._readObjectFull(deviceAddress, objectId.type, objectId.instance);
+        if (!full.error) {
+            return full;
+        }
+
+        logger.log('warn', `[Discovery] Full object read failed for ${objectId.type}/${objectId.instance}: ${full.error.message || full.error}`);
+        const basic = await this._readObjectBasic(deviceAddress, objectId.type, objectId.instance);
+        if (!basic.error) {
+            return basic;
+        }
+
+        logger.log('warn', `[Discovery] Basic object read failed for ${objectId.type}/${objectId.instance}: ${basic.error.message || basic.error}`);
+        return {
+            error: null,
+            value: this._buildMinimalObjectReadResult(objectId)
+        };
+    }
+
     _readObjectPresentValue(deviceAddress, type, instance) {
         return this._readObject(deviceAddress, type, instance, [
             { id: bacnet.enum.PropertyIds.PROP_PRESENT_VALUE },
@@ -468,6 +496,18 @@ class BacnetClient extends EventEmitter {
             return property.value[0].value;
         }
         return null;
+    }
+
+    _buildMinimalObjectReadResult(objectId) {
+        return {
+            values: [{
+                objectId,
+                values: [
+                    { id: bacnet.enum.PropertyIds.PROP_OBJECT_IDENTIFIER, value: [{ value: objectId }] },
+                    { id: bacnet.enum.PropertyIds.PROP_OBJECT_TYPE, value: [{ value: objectId.type }] }
+                ]
+            }]
+        };
     }
 
     _extractObjectListEntries(result) {
@@ -577,7 +617,7 @@ class BacnetClient extends EventEmitter {
                             objectArray = await this._readObjectListByIndex(device.address, device.deviceId, expectedCount);
                         }
                         return Promise.all(objectArray.map((object) => {
-                            return this._readObjectFull(device.address, object.type, object.instance);
+                            return this._readObjectDiscoveryDetails(device.address, object);
                         }));
                     })
                     .then((resolved) => {

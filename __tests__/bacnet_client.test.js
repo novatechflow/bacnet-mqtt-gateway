@@ -253,6 +253,47 @@ describe('BacnetClient', () => {
         cleanup(client);
     });
 
+    test('scanDevice keeps objects when optional full metadata reads fail', async () => {
+        const allObjects = [
+            { type: 5, instance: 136448 },
+            { type: 19, instance: 136449 }
+        ];
+        mockReadProperty.mockImplementation((_addr, _objectId, _propertyId, options, cb) => {
+            cb(null, buildReadPropertyResponse(allObjects.length, options.arrayIndex));
+        });
+        mockReadPropertyMultiple.mockImplementation((_addr, requestArray, _opts, cb) => {
+            const request = requestArray[0];
+            if (request.objectId.type === 8) {
+                cb(null, buildObjectListResponse(allObjects));
+                return;
+            }
+            const propertyIds = request.properties.map((property) => property.id);
+            if (request.objectId.type === 5 && propertyIds.includes(117)) {
+                cb(new Error('unknown property units'));
+                return;
+            }
+            cb(null, buildFullObjectResponse(request.objectId, `Object ${request.objectId.instance}`));
+        });
+
+        const { BacnetClient } = require('../src/bacnet_client');
+        const client = new BacnetClient({ runtimeState, bacnetConfig });
+        await client.ready;
+
+        const objects = await client.scanDevice({ address: '10.0.0.1', deviceId: 123 });
+
+        expect(objects.map((object) => object.objectId)).toEqual(allObjects);
+        expect(mockReadPropertyMultiple).toHaveBeenCalledWith(
+            '10.0.0.1',
+            [expect.objectContaining({
+                objectId: { type: 5, instance: 136448 },
+                properties: expect.not.arrayContaining([{ id: 117 }])
+            })],
+            expect.any(Object),
+            expect.any(Function)
+        );
+        cleanup(client);
+    });
+
     test('pollDevice emits telemetry with freshness metadata and persists state', async () => {
         mockReadPropertyMultiple.mockImplementation((_addr, requestArray, _opts, cb) => {
             const objectId = requestArray[0].objectId;
@@ -485,7 +526,7 @@ describe('BacnetClient', () => {
             values: [{ values: [{ value: [{ value: { type: 2, instance: 1 } }] }] }]
         }));
         jest.spyOn(client, '_readObjectListCount').mockResolvedValue(1);
-        jest.spyOn(client, '_readObjectFull').mockRejectedValue(new Error('catastrophic read'));
+        jest.spyOn(client, '_readObjectDiscoveryDetails').mockRejectedValue(new Error('catastrophic read'));
 
         await expect(client.scanDevice({ address: '10.0.0.5', deviceId: 5 })).rejects.toThrow('catastrophic read');
         expect(logger.log).toHaveBeenCalledWith('error', expect.stringContaining('catastrophic read'));
