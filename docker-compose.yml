@@ -8,8 +8,7 @@ services:
     restart: unless-stopped
 
   bacnet-gateway:
-    image: bacnet-mqtt-gateway:local
-    build: .
+    image: ghcr.io/novatechflow/bacnet-mqtt-gateway:latest
     env_file: .env
     depends_on:
       - mosquitto

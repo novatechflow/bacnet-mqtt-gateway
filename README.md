@@ -10,14 +10,20 @@ Pull prebuilt image:
 docker pull ghcr.io/novatechflow/bacnet-mqtt-gateway:latest
 ```
 
+Release images are published to GitHub Container Registry for:
+
+- `linux/amd64`
+- `linux/arm64`
+- `linux/arm/v7`
+
 Quick start with Docker Compose (gateway + Mosquitto):
 
 ```bash
 cp .env.example .env   # adjust credentials and gateway ID
-docker compose up -d --build
+docker compose up -d
 ```
 
-This uses `docker-compose.yml` and `mosquitto.conf` in the repo, builds a local image tag (`bacnet-mqtt-gateway:local`), and mounts `./devices` and `./config` into the container.
+This uses `docker-compose.yml` and `mosquitto.conf` in the repo, pulls `ghcr.io/novatechflow/bacnet-mqtt-gateway:latest`, and mounts `./devices` and `./config` into the container.
 The auth database lives in `./data` (mounted), so credentials persist across restarts.
 
 ## Functionalities
@@ -322,14 +328,20 @@ mosquitto_pub -h <broker> -t "bacnetwrite/my_bacnet_gateway_1/114/1_0/85/set" -m
 
 ## Run with Docker
 
-Gateway can also be run as a docker container. Just build the image and start a container:
+Gateway can also be run as a docker container. Pull the published image and start a container:
 
 ```shell
-docker build -t bacnet-mqtt-gateway
-docker run -p 8082:8082 -v /mnt/bacnet-gateway/devices:/usr/src/app/devices -v /mnt/bacnet-gateway/config:/usr/src/app/config bacnet-mqtt-gateway
+docker pull ghcr.io/novatechflow/bacnet-mqtt-gateway:latest
+docker run -p 8082:8082 -v /mnt/bacnet-gateway/devices:/usr/src/app/devices -v /mnt/bacnet-gateway/config:/usr/src/app/config ghcr.io/novatechflow/bacnet-mqtt-gateway:latest
 ```
 
 With the specified file mountings you can put the config file under `/mnt/bacnet-gateway/config` and the device configs under `/mnt/bacnet-gateway/devices` on the host system.
+
+To build a local image for development:
+
+```shell
+docker build -t bacnet-mqtt-gateway:local .
+```
 
 ## Architecture Context
 

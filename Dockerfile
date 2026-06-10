@@ -1,4 +1,4 @@
-FROM node:20
+FROM node:20-bookworm-slim
 
 EXPOSE 47808/tcp
 EXPOSE 47808/udp
@@ -10,7 +10,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
-RUN npm_config_build_from_source=true npm install
+RUN npm_config_build_from_source=true npm ci --omit=dev
 
 COPY . .
 
