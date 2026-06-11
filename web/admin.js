@@ -231,6 +231,19 @@ const ObjectWriteForm = {
     }
 };
 
+function isDemoScanAvailable() {
+    if (typeof window === 'undefined' || !window.location) {
+        return false;
+    }
+    const hostname = window.location.hostname;
+    const search = window.location.search || '';
+    return hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname === '[::1]' ||
+        hostname === '::1' ||
+        search.includes('demo=1');
+}
+
 const DeviceScan = {
     template: '#device-scan-template',
     components: { Spinner, ObjectWriteForm },
@@ -240,29 +253,184 @@ const DeviceScan = {
     data() {
         return {
             loading: false,
+            diagnosticsLoading: false,
+            diagnosticsExpanded: false,
+            diagnosticsFilter: 'all',
+            demoScanAvailable: isDemoScanAvailable(),
             deviceId: '',
             address: '',
             objects: [],
+            configuredObjectKeys: new Set(),
+            runtimeObjectKeys: new Set(),
+            runtimeObjectsByKey: {},
             error: null,
+            diagnosticsError: null,
             selectedObject: null
         };
+    },
+    computed: {
+        filteredObjects() {
+            if (this.diagnosticsFilter === 'configured') {
+                return this.objects.filter((object) => object.configured);
+            }
+            if (this.diagnosticsFilter === 'runtime') {
+                return this.objects.filter((object) => object.runtime);
+            }
+            if (this.diagnosticsFilter === 'discoveredOnly') {
+                return this.objects.filter((object) => !object.configured && !object.runtime);
+            }
+            return this.objects;
+        },
+        diagnosticsSummary() {
+            const discoveredKeys = new Set(this.objects.map((object) => object.objectKey).filter(Boolean));
+            const configuredNotDiscovered = Array.from(this.configuredObjectKeys).filter((key) => !discoveredKeys.has(key));
+            const runtimeNotDiscovered = Array.from(this.runtimeObjectKeys).filter((key) => !discoveredKeys.has(key));
+            return {
+                discovered: discoveredKeys.size,
+                configured: this.configuredObjectKeys.size,
+                runtime: this.runtimeObjectKeys.size,
+                discoveredOnly: this.objects.filter((object) => !object.configured && !object.runtime).length,
+                configuredNotDiscovered,
+                runtimeNotDiscovered
+            };
+        }
     },
     methods: {
         async scanDevice() {
             this.loading = true;
             this.error = null;
+            this.diagnosticsError = null;
             try {
                 const response = await axios.put(`/api/bacnet/${this.deviceId}/objects`, {
                     deviceId: this.deviceId,
                     address: this.address
                 });
-                this.objects = response.data || [];
+                this.objects = (response.data || []).map((object) => this.decorateObject(object));
+                await this.loadDiagnostics();
             } catch (error) {
                 this.objects = [];
                 this.error = extractErrorMessage(error, 'Failed to read BACnet device objects');
             } finally {
                 this.loading = false;
             }
+        },
+        loadDemoScan() {
+            this.loading = false;
+            this.diagnosticsLoading = false;
+            this.error = null;
+            this.diagnosticsError = null;
+            this.deviceId = 'demo-vrf-1';
+            this.address = '127.0.0.1';
+            this.configuredObjectKeys = new Set(['2_202', '2_203']);
+            this.runtimeObjectKeys = new Set(['2_202']);
+            this.runtimeObjectsByKey = {
+                '2_202': {
+                    device_id: 'demo-vrf-1',
+                    object_key: '2_202',
+                    object_name: 'Zone Temperature',
+                    value: 21.5,
+                    source_status: 'fresh',
+                    updated_at: Date.now()
+                }
+            };
+            this.objects = [
+                {
+                    objectId: { type: 2, instance: 202 },
+                    name: 'Zone Temperature',
+                    description: 'Demo configured object with runtime state'
+                },
+                {
+                    objectId: { type: 2, instance: 203 },
+                    name: 'Setpoint',
+                    description: 'Demo configured object waiting for runtime state'
+                },
+                {
+                    objectId: { type: 3, instance: 9 },
+                    name: 'Fan Proof',
+                    description: 'Demo discovered-only BACnet object'
+                }
+            ].map((object) => this.decorateObject(object));
+            this.diagnosticsExpanded = true;
+            this.diagnosticsFilter = 'all';
+        },
+        objectKeyFromScanObject(object) {
+            if (!object || !object.objectId) {
+                return null;
+            }
+            return `${object.objectId.type}_${object.objectId.instance}`;
+        },
+        decorateObject(object) {
+            const objectKey = this.objectKeyFromScanObject(object);
+            return {
+                ...object,
+                objectKey,
+                configured: objectKey ? this.configuredObjectKeys.has(objectKey) : false,
+                runtime: objectKey ? this.runtimeObjectKeys.has(objectKey) : false
+            };
+        },
+        applyDiagnostics() {
+            this.objects = this.objects.map((object) => this.decorateObject(object));
+        },
+        async loadDiagnostics() {
+            if (!this.deviceId) {
+                return;
+            }
+            this.diagnosticsLoading = true;
+            this.diagnosticsError = null;
+            try {
+                const [configuredResponse, runtimeResponse] = await Promise.all([
+                    axios.get('/api/bacnet/configured'),
+                    axios.get(`/api/bacnet/runtime-objects/${encodeURIComponent(this.deviceId)}`)
+                ]);
+                const configuredDevice = (configuredResponse.data || []).find((device) => {
+                    return String(device.deviceId) === String(this.deviceId);
+                });
+                const configuredObjects = configuredDevice && Array.isArray(configuredDevice.objects)
+                    ? configuredDevice.objects
+                    : [];
+                const runtimeObjects = runtimeResponse.data || [];
+                this.configuredObjectKeys = new Set(configuredObjects.map((object) => object.objectKey).filter(Boolean));
+                this.runtimeObjectKeys = new Set(runtimeObjects.map((object) => object.object_key).filter(Boolean));
+                this.runtimeObjectsByKey = runtimeObjects.reduce((acc, object) => {
+                    acc[object.object_key] = object;
+                    return acc;
+                }, {});
+                this.applyDiagnostics();
+            } catch (error) {
+                this.configuredObjectKeys = new Set();
+                this.runtimeObjectKeys = new Set();
+                this.runtimeObjectsByKey = {};
+                this.applyDiagnostics();
+                this.diagnosticsError = extractErrorMessage(error, 'Failed to load object diagnostics');
+            } finally {
+                this.diagnosticsLoading = false;
+            }
+        },
+        objectStatusLabels(object) {
+            const labels = ['Discovered'];
+            if (object.configured) {
+                labels.push('Configured');
+            }
+            if (object.runtime) {
+                labels.push('Runtime');
+            }
+            return labels;
+        },
+        statusClass(label) {
+            return `state-${label.toLowerCase().replace(/\s+/g, '-')}`;
+        },
+        diagnosticPayload(object) {
+            const runtimeObject = this.runtimeObjectsByKey[object.objectKey] || null;
+            return JSON.stringify({
+                objectKey: object.objectKey,
+                discovered: true,
+                configured: object.configured,
+                runtime: object.runtime,
+                deviceId: this.deviceId,
+                runtimeValue: runtimeObject ? runtimeObject.value : undefined,
+                runtimeUpdatedAt: runtimeObject ? (runtimeObject.updated_at || runtimeObject.acquired_at) : undefined,
+                scan: object
+            }, null, 2);
         },
         openWriteForm(object) {
             this.selectedObject = {

@@ -78,6 +78,75 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeviceConfigObject'
+    ConfiguredDeviceObject:
+      type: object
+      description: BACnet object configured for polling on a device.
+      properties:
+        objectKey:
+          type: string
+          description: Stable object key in type_instance form, used to compare configured, discovered, and runtime objects.
+          example: "2_202"
+        objectType:
+          type: integer
+          description: BACnet object type number.
+          example: 2
+        objectInstance:
+          type: integer
+          description: BACnet object instance number.
+          example: 202
+        name:
+          type: string
+          nullable: true
+          description: Configured or discovered object name, when available.
+          example: Indoor Temperature
+        description:
+          type: string
+          nullable: true
+          description: Configured or discovered object description, when available.
+          example: Zone temperature sensor
+    ConfiguredDevice:
+      type: object
+      description: Polling metadata and configured object list for one BACnet device.
+      properties:
+        deviceId:
+          type: string
+          description: Configured device ID.
+          example: "114"
+        address:
+          type: string
+          nullable: true
+          description: BACnet device network address.
+          example: "192.168.1.101"
+        schedule:
+          type: string
+          nullable: true
+          description: Cron-style polling schedule, when configured.
+          example: "*/15 * * * * *"
+        pollClass:
+          type: string
+          nullable: true
+          description: Polling class used by the bounded scheduler.
+          enum: [fast, normal, slow]
+          example: normal
+        intervalMs:
+          type: integer
+          nullable: true
+          description: Explicit polling interval in milliseconds.
+          example: 5000
+        freshnessMs:
+          type: integer
+          nullable: true
+          description: Maximum age in milliseconds before downstream systems should treat the value as stale.
+          example: 15000
+        objectCount:
+          type: integer
+          description: Number of objects configured for polling.
+          example: 3
+        objects:
+          type: array
+          description: Configured objects used by the admin UI diagnostics view.
+          items:
+            $ref: '#/components/schemas/ConfiguredDeviceObject'
     BacnetObjectResponse:
       type: object
       properties:
@@ -264,6 +333,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/bacnet/configured:
+    get:
+      summary: List configured BACnet devices and polling objects
+      description: Returns configured device polling metadata and object keys for comparing discovered scan results with configured and runtime object state.
+      responses:
+        '200':
+          description: Configured BACnet devices and their polling object metadata.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConfiguredDevice'
 
   /api/bacnet/{deviceId}/config:
     put:

@@ -37,7 +37,11 @@ describe('web admin app', () => {
             },
             window: {
                 setInterval: jest.fn(),
-                setTimeout: jest.fn((fn) => fn())
+                setTimeout: jest.fn((fn) => fn()),
+                location: {
+                    hostname: 'example.test',
+                    search: ''
+                }
             },
             setInterval: jest.fn(),
             setTimeout: jest.fn((fn) => fn()),
@@ -142,5 +146,87 @@ describe('web admin app', () => {
         expect(component.objects).toEqual([{ device_id: 'Gree VRF/1', object_key: '2_202', value: 21.5 }]);
         expect(component.loaded).toBe(true);
         expect(component.loading).toBe(false);
+    });
+
+    test('device scan annotates discovered objects with configured and runtime diagnostics', async () => {
+        const { context, exports } = loadAdminScript();
+        const DeviceScan = exports.appOptions.components.DeviceScan;
+        const component = {
+            ...DeviceScan.data(),
+            ...DeviceScan.methods
+        };
+        component.deviceId = '1';
+        component.address = '192.168.1.20';
+        context.axios.put.mockResolvedValue({
+            data: [
+                { objectId: { type: 2, instance: 202 }, name: 'Zone Temp' },
+                { objectId: { type: 3, instance: 9 }, name: 'Fan State' }
+            ]
+        });
+        context.axios.get.mockImplementation((url) => {
+            if (url === '/api/bacnet/configured') {
+                return Promise.resolve({
+                    data: [
+                        { deviceId: '1', objects: [{ objectKey: '2_202', objectType: 2, objectInstance: 202 }] }
+                    ]
+                });
+            }
+            if (url === '/api/bacnet/runtime-objects/1') {
+                return Promise.resolve({
+                    data: [{ object_key: '2_202', value: 21.5, updated_at: 1000 }]
+                });
+            }
+            return Promise.reject(new Error(`unexpected URL ${url}`));
+        });
+
+        await component.scanDevice();
+
+        expect(context.axios.put).toHaveBeenCalledWith('/api/bacnet/1/objects', {
+            deviceId: '1',
+            address: '192.168.1.20'
+        });
+        expect(component.objects[0]).toEqual(expect.objectContaining({
+            objectKey: '2_202',
+            configured: true,
+            runtime: true
+        }));
+        expect(component.objects[1]).toEqual(expect.objectContaining({
+            objectKey: '3_9',
+            configured: false,
+            runtime: false
+        }));
+        expect(component.objectStatusLabels(component.objects[0])).toEqual(['Discovered', 'Configured', 'Runtime']);
+        expect(DeviceScan.computed.diagnosticsSummary.call(component)).toEqual(expect.objectContaining({
+            discovered: 2,
+            configured: 1,
+            runtime: 1,
+            discoveredOnly: 1
+        }));
+    });
+
+    test('device scan can load demo diagnostics data on localhost', () => {
+        const { context, exports } = loadAdminScript();
+        context.window.location.hostname = 'localhost';
+        const DeviceScan = exports.appOptions.components.DeviceScan;
+        const component = {
+            ...DeviceScan.data(),
+            ...DeviceScan.methods
+        };
+
+        component.loadDemoScan();
+
+        expect(component.demoScanAvailable).toBe(true);
+        expect(component.deviceId).toBe('demo-vrf-1');
+        expect(component.objects).toHaveLength(3);
+        expect(component.objectStatusLabels(component.objects[0])).toEqual(['Discovered', 'Configured', 'Runtime']);
+        expect(component.objectStatusLabels(component.objects[1])).toEqual(['Discovered', 'Configured']);
+        expect(component.objectStatusLabels(component.objects[2])).toEqual(['Discovered']);
+        expect(DeviceScan.computed.diagnosticsSummary.call(component)).toEqual(expect.objectContaining({
+            discovered: 3,
+            configured: 2,
+            runtime: 1,
+            discoveredOnly: 1
+        }));
+        expect(component.diagnosticsExpanded).toBe(true);
     });
 });

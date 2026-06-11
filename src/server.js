@@ -174,6 +174,18 @@ class Server {
         const list = [];
         if (this.bacnetClient && this.bacnetClient.deviceConfigs) {
             for (const [deviceId, cfg] of this.bacnetClient.deviceConfigs.entries()) {
+                const objects = Array.isArray(cfg.objects) ? cfg.objects.map((obj) => {
+                    const objectId = obj && obj.objectId ? obj.objectId : {};
+                    const type = objectId.type;
+                    const instance = objectId.instance;
+                    return {
+                        objectKey: type !== undefined && instance !== undefined ? `${type}_${instance}` : undefined,
+                        objectType: type,
+                        objectInstance: instance,
+                        name: obj && obj.name,
+                        description: obj && obj.description
+                    };
+                }) : [];
                 list.push({
                     deviceId,
                     address: cfg.device && cfg.device.address,
@@ -181,7 +193,8 @@ class Server {
                     pollClass: cfg.polling && cfg.polling.class,
                     intervalMs: cfg.polling && cfg.polling.intervalMs,
                     freshnessMs: cfg.polling && cfg.polling.freshnessMs,
-                    objectCount: Array.isArray(cfg.objects) ? cfg.objects.length : 0
+                    objectCount: objects.length,
+                    objects
                 });
             }
         }

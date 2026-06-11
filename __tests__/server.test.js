@@ -207,7 +207,7 @@ describe('Server helper methods', () => {
                 {
                     device: { address: '192.168.1.10' },
                     polling: { schedule: '*/15 * * * * *', class: 'fast', intervalMs: 1000, freshnessMs: 2000 },
-                    objects: [{ objectId: { type: 2, instance: 202 } }]
+                    objects: [{ objectId: { type: 2, instance: 202 }, name: 'Zone Temp', description: 'Room temperature' }]
                 }
             ]])
         };
@@ -222,6 +222,13 @@ describe('Server helper methods', () => {
             freshnessMs: 2000,
             objectCount: 1
         });
+        expect(res.payload[0].objects).toEqual([{
+            objectKey: '2_202',
+            objectType: 2,
+            objectInstance: 202,
+            name: 'Zone Temp',
+            description: 'Room temperature'
+        }]);
     });
 
     test('listRuntime returns persisted runtime states', async () => {

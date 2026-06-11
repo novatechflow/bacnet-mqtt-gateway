@@ -31,4 +31,16 @@ describe('OpenAPI regression coverage', () => {
                 expect.objectContaining({ type: 'boolean' })
             ]));
     });
+
+    test('documents configured device object metadata for diagnostics', () => {
+        const pathSpec = spec.paths['/api/bacnet/configured'];
+
+        expect(pathSpec.get.summary).toContain('configured BACnet devices');
+        expect(pathSpec.get.responses['200'].content['application/json'].schema.items.$ref)
+            .toBe('#/components/schemas/ConfiguredDevice');
+        expect(spec.components.schemas.ConfiguredDevice.properties.objects.items.$ref)
+            .toBe('#/components/schemas/ConfiguredDeviceObject');
+        expect(spec.components.schemas.ConfiguredDeviceObject.properties.objectKey.example)
+            .toBe('2_202');
+    });
 });

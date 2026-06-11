@@ -179,6 +179,14 @@
             </div>
             <div class="form-group action-group">
                 <button class="btn btn-primary" :disabled="loading">Read Objects</button>
+                <button
+                    v-if="demoScanAvailable"
+                    class="btn btn-outline-light ml-2"
+                    type="button"
+                    :disabled="loading"
+                    @click="loadDemoScan">
+                    Load Demo Scan
+                </button>
             </div>
         </form>
 
@@ -186,21 +194,78 @@
             <spinner></spinner>
         </div>
         <div v-if="error" class="alert alert-danger">{{ error }}</div>
+        <div v-if="diagnosticsError" class="alert alert-warning">{{ diagnosticsError }}</div>
 
-        <table class="table table-dark mt-3" v-if="!loading && objects.length">
+        <div v-if="!loading && objects.length" class="diagnostics-bar">
+            <div class="diagnostics-counts">
+                <span>Discovered <strong>{{ diagnosticsSummary.discovered }}</strong></span>
+                <span>Configured <strong>{{ diagnosticsSummary.configured }}</strong></span>
+                <span>Runtime <strong>{{ diagnosticsSummary.runtime }}</strong></span>
+                <span>Discovered only <strong>{{ diagnosticsSummary.discoveredOnly }}</strong></span>
+            </div>
+            <div class="diagnostics-actions">
+                <select v-model="diagnosticsFilter" class="form-control form-control-sm diagnostics-filter" aria-label="Object diagnostics filter">
+                    <option value="all">All objects</option>
+                    <option value="discoveredOnly">Discovered only</option>
+                    <option value="configured">Configured</option>
+                    <option value="runtime">Runtime</option>
+                </select>
+                <button class="btn btn-sm btn-outline-light" type="button" @click="diagnosticsExpanded = !diagnosticsExpanded">
+                    {{ diagnosticsExpanded ? 'Hide Diagnostics' : 'Show Diagnostics' }}
+                </button>
+            </div>
+        </div>
+
+        <div v-if="diagnosticsLoading" class="text-muted small mt-2">Loading diagnostics...</div>
+
+        <div v-if="diagnosticsExpanded && objects.length" class="diagnostics-panel">
+            <div>
+                <div class="diagnostics-label">Configured but not in latest scan</div>
+                <div v-if="diagnosticsSummary.configuredNotDiscovered.length" class="diagnostics-list">
+                    <span v-for="key in diagnosticsSummary.configuredNotDiscovered" :key="'cfg-' + key" class="diagnostics-token">{{ key }}</span>
+                </div>
+                <div v-else class="text-muted small">None</div>
+            </div>
+            <div>
+                <div class="diagnostics-label">Runtime but not in latest scan</div>
+                <div v-if="diagnosticsSummary.runtimeNotDiscovered.length" class="diagnostics-list">
+                    <span v-for="key in diagnosticsSummary.runtimeNotDiscovered" :key="'rt-' + key" class="diagnostics-token">{{ key }}</span>
+                </div>
+                <div v-else class="text-muted small">None</div>
+            </div>
+        </div>
+
+        <table class="table table-dark mt-3" v-if="!loading && filteredObjects.length">
             <thead>
             <tr>
                 <th>Object</th>
                 <th>Name</th>
                 <th>Description</th>
+                <th>State</th>
+                <th>Diagnostics</th>
                 <th>Action</th>
             </tr>
             </thead>
             <tbody>
-            <tr v-for="object in objects" :key="object.objectId.type + '-' + object.objectId.instance">
+            <tr v-for="object in filteredObjects" :key="object.objectId.type + '-' + object.objectId.instance">
                 <td>{{ object.objectId.type }} / {{ object.objectId.instance }}</td>
                 <td>{{ object.name || '-' }}</td>
                 <td>{{ object.description || '-' }}</td>
+                <td>
+                    <span
+                        v-for="label in objectStatusLabels(object)"
+                        :key="object.objectKey + '-' + label"
+                        class="state-badge"
+                        :class="statusClass(label)">
+                        {{ label }}
+                    </span>
+                </td>
+                <td>
+                    <details class="object-diagnostics">
+                        <summary>Details</summary>
+                        <pre>{{ diagnosticPayload(object) }}</pre>
+                    </details>
+                </td>
                 <td>
                     <button v-if="canWrite" class="btn btn-sm btn-info" @click="openWriteForm(object)">Write</button>
                     <span v-else class="text-muted small">Admin only</span>
@@ -208,6 +273,7 @@
             </tr>
             </tbody>
         </table>
+        <div v-else-if="!loading && objects.length" class="empty-state">No objects match the selected diagnostics filter.</div>
         <div v-else-if="!loading" class="empty-state">No objects loaded.</div>
 
         <object-write-form

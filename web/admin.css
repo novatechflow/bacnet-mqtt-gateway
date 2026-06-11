@@ -201,6 +201,116 @@ body {
     overflow-wrap: anywhere;
 }
 
+.diagnostics-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 16px;
+    padding: 12px 14px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 12px;
+    background: rgba(30, 41, 59, 0.58);
+}
+
+.diagnostics-counts,
+.diagnostics-actions,
+.diagnostics-list {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.diagnostics-counts span {
+    color: #cbd5e1;
+    font-size: 0.86rem;
+}
+
+.diagnostics-counts strong {
+    color: #f8fafc;
+}
+
+.diagnostics-filter {
+    width: 168px;
+}
+
+.diagnostics-panel {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+    margin-top: 12px;
+    padding: 14px;
+    border: 1px solid rgba(125, 211, 252, 0.18);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.68);
+}
+
+.diagnostics-label {
+    margin-bottom: 8px;
+    color: #94a3b8;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.diagnostics-token,
+.state-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+.diagnostics-token {
+    color: #dbeafe;
+    background: rgba(29, 78, 216, 0.35);
+}
+
+.state-badge {
+    margin: 2px 4px 2px 0;
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(51, 65, 85, 0.82);
+}
+
+.state-configured {
+    color: #ccfbf1;
+    border-color: rgba(20, 184, 166, 0.4);
+    background: rgba(15, 118, 110, 0.36);
+}
+
+.state-runtime {
+    color: #dbeafe;
+    border-color: rgba(59, 130, 246, 0.42);
+    background: rgba(29, 78, 216, 0.38);
+}
+
+.object-diagnostics summary {
+    color: #7dd3fc;
+    cursor: pointer;
+    font-size: 0.86rem;
+}
+
+.object-diagnostics pre {
+    max-width: min(520px, 72vw);
+    max-height: 280px;
+    margin-top: 8px;
+    padding: 10px;
+    overflow: auto;
+    color: #d9e2ec;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.85);
+    font-size: 0.78rem;
+}
+
 .modal-backdrop {
     position: fixed;
     inset: 0;
