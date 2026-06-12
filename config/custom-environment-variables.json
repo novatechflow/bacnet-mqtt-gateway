@@ -37,6 +37,9 @@
   "httpServer": {
     "port": "HTTP_PORT"
   },
+  "openapi": {
+    "serverUrl": "OPENAPI_SERVER_URL"
+  },
   "logger": {
     "level": "LOG_LEVEL"
   }

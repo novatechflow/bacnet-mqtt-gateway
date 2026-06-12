@@ -69,6 +69,7 @@ The Object Scan view includes a local demo scan on `localhost` or when the admin
 
     # HTTP Server Configuration
     HTTP_PORT=8082 # Port for the web UI and REST API
+    OPENAPI_SERVER_URL=http://localhost:8082 # Optional advertised API URL for Swagger/OpenAPI clients
 
     # Logging Configuration
     LOG_LEVEL=info # e.g., debug, info, warn, error
@@ -101,6 +102,7 @@ The Object Scan view includes a local demo scan on `localhost` or when the admin
     ```
 
     Default fallback values are present in `config/default.json`. The mapping between environment variables and the configuration structure is defined in `config/custom-environment-variables.json`.
+    If `OPENAPI_SERVER_URL` is unset, the OpenAPI docs keep the localhost default; set it deliberately when exposing the API through a specific host, IP, reverse proxy, or DNS name.
     The original MQTT configuration using certificate paths in `config/default.json` has been replaced by username/password authentication via environment variables.
 TLS is optional: set `MQTT_TLS_ENABLED=true` and point to CA/client cert/key paths to connect to secure brokers.
 

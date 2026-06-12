@@ -36,6 +36,9 @@
         "enabled": true,
         "port": 8082
     },
+    "openapi": {
+        "serverUrl": ""
+    },
     "logger": {
         "level": "info"
     },
