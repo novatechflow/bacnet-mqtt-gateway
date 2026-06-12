@@ -9,7 +9,30 @@ const path = require('path');
 const rateLimit = require('express-rate-limit');
 
 const port = config.get('httpServer.port');
-const openapiDocument = YAML.load(path.join(__dirname, '../openapi.yaml')); 
+const openapiDocument = buildOpenApiDocument(
+    YAML.load(path.join(__dirname, '../openapi.yaml')),
+    getOpenApiServerUrl()
+);
+
+function getOpenApiServerUrl() {
+    if (!config.has('openapi.serverUrl')) {
+        return '';
+    }
+    const serverUrl = config.get('openapi.serverUrl');
+    return typeof serverUrl === 'string' ? serverUrl.trim() : '';
+}
+
+function buildOpenApiDocument(document, configuredServerUrl) {
+    const spec = JSON.parse(JSON.stringify(document));
+    const serverUrl = typeof configuredServerUrl === 'string' ? configuredServerUrl.trim() : '';
+    if (serverUrl) {
+        spec.servers = [{
+            url: serverUrl,
+            description: 'Configured API server'
+        }];
+    }
+    return spec;
+}
 
 class Server {
 
@@ -421,4 +444,4 @@ class Server {
     }
 }
 
-module.exports = {Server};
+module.exports = {Server, buildOpenApiDocument};

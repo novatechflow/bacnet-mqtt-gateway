@@ -87,6 +87,35 @@ describe('Server helper methods', () => {
         expressApp.listen.mock.calls[0][1]();
     });
 
+    test('buildOpenApiDocument uses configured server URL when provided', () => {
+        const { buildOpenApiDocument } = require('../src/server');
+        const spec = buildOpenApiDocument({
+            servers: [{
+                url: 'http://localhost:{port}',
+                description: 'Local development server',
+                variables: { port: { default: '8082' } }
+            }]
+        }, ' https://gateway.example.com/api ');
+
+        expect(spec.servers).toEqual([{
+            url: 'https://gateway.example.com/api',
+            description: 'Configured API server'
+        }]);
+    });
+
+    test('buildOpenApiDocument preserves localhost server when URL is not configured', () => {
+        const { buildOpenApiDocument } = require('../src/server');
+        const document = {
+            servers: [{
+                url: 'http://localhost:{port}',
+                description: 'Local development server',
+                variables: { port: { default: '8082' } }
+            }]
+        };
+
+        expect(buildOpenApiDocument(document, '').servers).toEqual(document.servers);
+    });
+
     test('scanForDevices collects discovered devices and responds after timeout', () => {
         jest.useFakeTimers();
         const { EventEmitter } = require('events');
