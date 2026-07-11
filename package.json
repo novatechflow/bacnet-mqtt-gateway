@@ -16,7 +16,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "bacstack": "0.0.1-beta.13",
-    "bcryptjs": "^2.4.3",
+    "bcryptjs": "^3.0.3",
     "bl": ">=1.2.3",
     "body-parser": ">=2.2.1",
     "bufferutil": ">=4.0.1",
