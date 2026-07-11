@@ -31,7 +31,7 @@
     "node-schedule": "^2.1.1",
     "sqlite3": "^6.0.1",
     "swagger-ui-express": "^5.0.1",
-    "utf-8-validate": ">=5.0.2",
+    "utf-8-validate": ">=6.0.6",
     "winston": ">=3.2.1",
     "yamljs": "^0.3.0"
   },
