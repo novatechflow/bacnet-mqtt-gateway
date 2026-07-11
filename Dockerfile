@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim
+FROM node:26-bookworm-slim
 
 EXPOSE 47808/tcp
 EXPOSE 47808/udp
