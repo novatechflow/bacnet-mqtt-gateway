@@ -27,7 +27,7 @@
     "express-rate-limit": "^6.11.2",
     "glob-parent": ">=6.0.2",
     "jsonwebtoken": "^9.0.3",
-    "mqtt": ">=4.2.6",
+    "mqtt": ">=5.15.2",
     "node-schedule": "^2.1.1",
     "sqlite3": "^6.0.1",
     "swagger-ui-express": "^5.0.1",
