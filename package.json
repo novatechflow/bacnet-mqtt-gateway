@@ -17,7 +17,7 @@
   "dependencies": {
     "bacstack": "0.0.1-beta.14",
     "bcryptjs": "^3.0.3",
-    "bl": ">=7.0.6",
+    "bl": ">=7.0.7",
     "body-parser": ">=2.3.0",
     "bufferutil": ">=4.1.0",
     "config": "^4.4.2",
