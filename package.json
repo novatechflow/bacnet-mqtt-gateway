@@ -22,7 +22,7 @@
     "bufferutil": ">=4.1.0",
     "config": "^5.0.1",
     "cors": "^2.8.6",
-    "dotenv": "^17.4.2",
+    "dotenv": "^18.0.1",
     "express": ">=5.2.1",
     "express-rate-limit": "^8.7.0",
     "glob-parent": ">=6.0.2",
