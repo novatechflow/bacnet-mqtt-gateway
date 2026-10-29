@@ -18,7 +18,7 @@
     "bacstack": "0.0.1-beta.14",
     "bcryptjs": "^3.0.3",
     "bl": ">=7.0.13",
-    "body-parser": ">=2.3.0",
+    "body-parser": ">=2.4.0",
     "bufferutil": ">=4.1.0",
     "config": "^5.0.1",
     "cors": "^2.8.6",
